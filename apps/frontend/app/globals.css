@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  font-family: "Georgia", "Times New Roman", serif;
+  background: radial-gradient(circle at top left, #f7c59f40, transparent 55%),
+    radial-gradient(circle at 20% 80%, #9ad0ec40, transparent 55%),
+    #f8f6f2;
+  color: #1f2937;
+  min-height: 100vh;
+}
+
+input, textarea {
+  font-family: "Gill Sans", "Trebuchet MS", "Calibri", sans-serif;
+}
