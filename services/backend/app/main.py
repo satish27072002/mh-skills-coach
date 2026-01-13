@@ -32,6 +32,10 @@ app.add_middleware(
 def on_startup() -> None:
     init_db()
 
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
 
 def _set_cookie(response: JSONResponse, name: str, value: str) -> None:
     response.set_cookie(
