@@ -5,10 +5,13 @@ import secrets
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
+import httpx
 import stripe
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from google.auth.transport.requests import Request as GoogleRequest
+from google.oauth2 import id_token as google_id_token
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -43,6 +46,9 @@ THERAPIST_KEYWORDS = [
     "professional help"
 ]
 
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
+
 
 def _has_therapist_intent(message: str) -> bool:
     message_lower = message.lower()
@@ -76,6 +82,43 @@ def _code_challenge(code_verifier: str) -> str:
     return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
 
+def _exchange_code_for_id_token(code: str, code_verifier: str) -> str:
+    data = {
+        "code": code,
+        "client_id": settings.google_client_id,
+        "client_secret": settings.google_client_secret,
+        "redirect_uri": settings.google_redirect_uri,
+        "grant_type": "authorization_code",
+        "code_verifier": code_verifier
+    }
+    try:
+        response = httpx.post(GOOGLE_TOKEN_URL, data=data, timeout=10.0)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="google token exchange failed") from exc
+
+    payload = response.json()
+    id_token = payload.get("id_token")
+    if not id_token:
+        raise HTTPException(status_code=400, detail="missing id_token")
+    return id_token
+
+
+def _verify_id_token(id_token: str) -> dict[str, Any]:
+    try:
+        claims = google_id_token.verify_oauth2_token(
+            id_token,
+            GoogleRequest(),
+            settings.google_client_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid id_token") from exc
+
+    if claims.get("iss") not in GOOGLE_ISSUERS:
+        raise HTTPException(status_code=400, detail="invalid token issuer")
+    return claims
+
+
 @app.get("/auth/google/start")
 def auth_google_start() -> JSONResponse:
     if not settings.google_client_id:
@@ -102,13 +145,16 @@ def auth_google_start() -> JSONResponse:
 
 
 @app.get("/auth/google/callback")
-def auth_google_callback(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+def auth_google_callback(request: Request, db: Session = Depends(get_db)) -> Response:
     code = request.query_params.get("code")
     state = request.query_params.get("state")
     stored_state = request.cookies.get("oauth_state")
+    code_verifier = request.cookies.get("pkce_verifier")
 
     if not code or not state or state != stored_state:
         raise HTTPException(status_code=400, detail="invalid oauth state")
+    if not code_verifier:
+        raise HTTPException(status_code=400, detail="missing pkce verifier")
 
     if not settings.google_client_secret or not settings.google_client_id:
         user = db.execute(select(User).where(User.email == "demo@example.com")).scalar_one_or_none()
@@ -121,7 +167,26 @@ def auth_google_callback(request: Request, db: Session = Depends(get_db)) -> JSO
         _set_cookie(response, settings.session_cookie_name, str(user.id))
         return response
 
-    raise HTTPException(status_code=501, detail="oauth exchange not implemented")
+    id_token = _exchange_code_for_id_token(code, code_verifier)
+    claims = _verify_id_token(id_token)
+    email = claims.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="missing email")
+    name = claims.get("name") or claims.get("given_name") or "User"
+
+    user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+    if not user:
+        user = User(email=email, name=name)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    redirect_url = f"{settings.frontend_url.rstrip('/')}/"
+    response = RedirectResponse(url=redirect_url, status_code=302)
+    _set_cookie(response, settings.session_cookie_name, str(user.id))
+    response.delete_cookie("pkce_verifier")
+    response.delete_cookie("oauth_state")
+    return response
 
 
 @app.get("/me")

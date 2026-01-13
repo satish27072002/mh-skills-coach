@@ -6,6 +6,7 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://postgres:postgres@postgres:5432/mh"
     mcp_base_url: str = "http://mcp:7000"
+    frontend_url: str = "http://localhost:3000"
     stripe_secret_key: str | None = None
     stripe_webhook_secret: str | None = None
     stripe_price_id: str | None = None

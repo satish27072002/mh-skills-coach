@@ -1,16 +1,15 @@
-import os
-
-os.environ["DATABASE_URL"] = "sqlite+pysqlite:///./test.db"
-
 from fastapi.testclient import TestClient
 
-from app.db import init_db, SessionLocal
+from app import db
 from app.main import app
 from app.models import StripeEvent
 
 
 def test_webhook_idempotency():
-    init_db()
+    db.init_db()
+    with db.SessionLocal() as session:
+        session.query(StripeEvent).delete()
+        session.commit()
     client = TestClient(app)
 
     payload = {
@@ -27,6 +26,6 @@ def test_webhook_idempotency():
     assert second.status_code == 200
     assert second.json()["status"] == "already_processed"
 
-    with SessionLocal() as db:
-        events = db.query(StripeEvent).all()
+    with db.SessionLocal() as session:
+        events = session.query(StripeEvent).all()
         assert len(events) == 1

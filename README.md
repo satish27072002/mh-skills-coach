@@ -18,6 +18,13 @@ docker compose exec backend python -m pytest -q
 docker compose down
 ```
 
+## Google login (local)
+Set these env vars (backend):
+- GOOGLE_CLIENT_ID
+- GOOGLE_CLIENT_SECRET
+- GOOGLE_REDIRECT_URI (default: http://localhost:8000/auth/google/callback)
+- FRONTEND_URL (default: http://localhost:3000)
+
 ## Demo script
 Copy-paste prompts and expected behavior:
 1) "I feel anxious right now"
