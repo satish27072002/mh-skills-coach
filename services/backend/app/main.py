@@ -2,7 +2,8 @@ import base64
 import hashlib
 import json
 import secrets
-from typing import Any
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator
 
 import stripe
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -17,7 +18,14 @@ from .models import StripeEvent, User
 from .safety import route_message
 from .schemas import ChatRequest, ChatResponse, CheckoutSessionResponse
 
-app = FastAPI(title="mh-skills-backend")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    init_db()
+    yield
+
+
+app = FastAPI(title="mh-skills-backend", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,11 +34,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"]
 )
-
-
-@app.on_event("startup")
-def on_startup() -> None:
-    init_db()
 
 @app.get("/health")
 def health() -> dict[str, str]:
