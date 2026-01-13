@@ -95,11 +95,11 @@ TOOL_RESPONSE_SCHEMAS = {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "name": {"type": "string"},
+                        "title": {"type": "string"},
                         "url": {"type": "string"},
-                        "rationale": {"type": "string"}
+                        "description": {"type": "string"}
                     },
-                    "required": ["name", "url", "rationale"]
+                    "required": ["title", "url", "description"]
                 }
             }
         },
@@ -184,9 +184,9 @@ def booking_suggest(request: ToolRequest) -> dict[str, Any]:
     payload = {
         "providers": [
             {
-                "name": provider["name"],
+                "title": provider["name"],
                 "url": provider["url"],
-                "rationale": "Curated licensed platform with transparent intake."
+                "description": "Curated licensed platform with transparent intake."
             }
             for provider in filtered
         ]

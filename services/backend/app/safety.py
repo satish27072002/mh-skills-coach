@@ -29,8 +29,16 @@ def _contains_any(message: str, keywords: list[str]) -> bool:
     return any(keyword in message_lower for keyword in keywords)
 
 
+def is_crisis(message: str) -> bool:
+    return _contains_any(message, CRISIS_KEYWORDS)
+
+
+def is_medical_request(message: str) -> bool:
+    return _contains_any(message, MEDICAL_KEYWORDS)
+
+
 def route_message(message: str) -> ChatResponse:
-    if _contains_any(message, CRISIS_KEYWORDS):
+    if is_crisis(message):
         return ChatResponse(
             coach_message=(
                 "I am really sorry you are feeling this way. If you are in immediate danger, "
@@ -43,7 +51,7 @@ def route_message(message: str) -> ChatResponse:
             ]
         )
 
-    if _contains_any(message, MEDICAL_KEYWORDS):
+    if is_medical_request(message):
         return ChatResponse(
             coach_message=(
                 "This is beyond my capability. I cannot provide diagnosis, prescriptions, or medication advice. "

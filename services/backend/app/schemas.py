@@ -14,6 +14,7 @@ class Exercise(BaseModel):
 class Resource(BaseModel):
     title: str
     url: str
+    description: str | None = None
 
 
 class PremiumCta(BaseModel):

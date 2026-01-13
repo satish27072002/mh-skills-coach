@@ -14,8 +14,9 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .db import get_db, init_db
+from .mcp_client import suggest_providers
 from .models import StripeEvent, User
-from .safety import route_message
+from .safety import is_crisis, is_medical_request, route_message
 from .schemas import ChatRequest, ChatResponse, CheckoutSessionResponse
 
 
@@ -34,6 +35,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"]
 )
+
+THERAPIST_KEYWORDS = [
+    "therapist",
+    "counselor",
+    "counsellor",
+    "professional help"
+]
+
+
+def _has_therapist_intent(message: str) -> bool:
+    message_lower = message.lower()
+    return any(keyword in message_lower for keyword in THERAPIST_KEYWORDS)
+
 
 @app.get("/health")
 def health() -> dict[str, str]:
@@ -127,6 +141,16 @@ def logout() -> JSONResponse:
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(payload: ChatRequest) -> ChatResponse:
+    if is_crisis(payload.message) or is_medical_request(payload.message):
+        return route_message(payload.message)
+
+    if _has_therapist_intent(payload.message):
+        providers = suggest_providers()
+        return ChatResponse(
+            coach_message="Here are curated options for professional support.",
+            resources=providers
+        )
+
     return route_message(payload.message)
 
 
