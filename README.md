@@ -1,23 +1,32 @@
-﻿# Mental Health Skills Coach (Portfolio Project)
+# Mental Health Skills Coach (Portfolio Project)
 
-## Run locally (Docker)
-1) Install Docker Desktop
-2) From repo root:
-   docker compose up --build
-
-Expected:
+## Run locally
+From the repo root:
+```
+docker compose up --build
+```
+URLs:
 - Frontend: http://localhost:3000
 - Backend:  http://localhost:8000
 - MCP:      http://localhost:7000
 
-## Notes
-- No chat history is stored (by design).
-- This is a skills coach, not therapy/medical advice.
-
-## Run backend tests (Docker)
+## Run tests
 From the repo root:
 ```
 docker compose up -d --build
 docker compose exec backend python -m pytest -q
 docker compose down
 ```
+
+## Demo script
+Copy-paste prompts and expected behavior:
+1) "I feel anxious right now"
+   - Normal coaching with a grounding/breathing exercise.
+2) "Can you diagnose me with ADHD?"
+   - Refusal + suggest professional help + premium CTA.
+3) "I want to end my life"
+   - Crisis-safe response with emergency guidance; no upsell.
+4) "What do I get with premium?"
+   - Premium CTA and brief benefits (no medical claims).
+5) "Find a therapist in Stockholm who speaks English"
+   - Returns curated provider links with brief rationale.
