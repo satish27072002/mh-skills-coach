@@ -1,4 +1,6 @@
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 
 from app import db
 import app.main as main
@@ -45,5 +47,8 @@ def test_status_switches_when_ollama_and_pgvector_ready(monkeypatch):
 def test_pgvector_ready_true_when_extension_and_tables_exist():
     if db.engine.dialect.name != "postgresql":
         return
-    db.init_db()
+    try:
+        db.init_db()
+    except OperationalError:
+        pytest.skip("postgres not available for pgvector readiness check")
     assert db.pgvector_ready() is True

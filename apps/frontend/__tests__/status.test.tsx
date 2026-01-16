@@ -1,3 +1,4 @@
+import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import { StatusBadge } from "../app/page";
 
@@ -13,10 +14,10 @@ describe("StatusBadge", () => {
       )
     );
 
-    render(<StatusBadge fetcher={mockFetch} />);
+    render(React.createElement(StatusBadge, { fetcher: mockFetch }));
 
     await waitFor(() => {
-      expect(screen.getByText(/LLM \+ RAG/i)).toBeInTheDocument();
+      expect(screen.getByText(/LLM\+RAG/i)).toBeInTheDocument();
       expect(screen.getByText(/demo-model/i)).toBeInTheDocument();
     });
   });

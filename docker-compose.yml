@@ -15,8 +15,11 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    volumes:
+      - ./data/papers:/data/papers:ro
     environment:
       - DATABASE_URL=postgresql+psycopg://postgres:postgres@postgres:5432/mh
+      - FRONTEND_URL=http://localhost:3000
       - STRIPE_SECRET_KEY=
       - STRIPE_WEBHOOK_SECRET=
       - STRIPE_PRICE_ID=
@@ -28,8 +31,14 @@ services:
       context: ./services/mcp
     ports:
       - "7000:7000"
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
@@ -41,3 +50,4 @@ services:
 
 volumes:
   pgdata:
+  ollama:

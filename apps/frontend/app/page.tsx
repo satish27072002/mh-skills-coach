@@ -11,6 +11,13 @@ type ChatResponse = {
   };
   resources?: { title: string; url: string; description?: string }[];
   premium_cta?: { enabled: boolean; message: string };
+  therapists?: {
+    name: string;
+    address: string;
+    url: string;
+    phone: string;
+    distance_km: number;
+  }[];
   sources?: { source_id: string; text?: string; snippet?: string }[];
   risk_level?: string;
 };
@@ -21,6 +28,7 @@ type Message = {
   content: string;
   exercise?: ChatResponse["exercise"];
   resources?: ChatResponse["resources"];
+  therapists?: ChatResponse["therapists"];
   sources?: ChatResponse["sources"];
   premium_cta?: ChatResponse["premium_cta"];
   risk_level?: string;
@@ -39,9 +47,30 @@ const defaultApiBase =
       ? "http://localhost:8000"
       : "http://backend:8000";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || defaultApiBase;
+const envApiBase =
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  process.env.NEXT_PUBLIC_API_BASE ||
+  "";
 
-export function StatusBadge({ fetcher = fetch }: { fetcher?: typeof fetch }) {
+const resolveApiBase = () => {
+  let base = envApiBase || defaultApiBase;
+  if (
+    typeof window !== "undefined" &&
+    window.location.hostname === "localhost" &&
+    base.includes("backend:8000")
+  ) {
+    base = "http://localhost:8000";
+  }
+  return base;
+};
+
+export function StatusBadge({
+  fetcher = fetch,
+  apiBase = resolveApiBase()
+}: {
+  fetcher?: typeof fetch;
+  apiBase?: string;
+}) {
   const [status, setStatus] = useState<StatusState>({
     mode: null,
     model: null,
@@ -53,7 +82,7 @@ export function StatusBadge({ fetcher = fetch }: { fetcher?: typeof fetch }) {
 
     const load = async () => {
       try {
-        const res = await fetcher(`${API_BASE}/status`);
+        const res = await fetcher(`${apiBase}/status`, { credentials: "include" });
         if (!res.ok) throw new Error("bad status");
         const data = await res.json();
         if (!cancelled) {
@@ -76,7 +105,7 @@ export function StatusBadge({ fetcher = fetch }: { fetcher?: typeof fetch }) {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [fetcher]);
+  }, [fetcher, apiBase]);
 
   if (status.backend === "offline") {
     return (
@@ -106,10 +135,20 @@ export function StatusBadge({ fetcher = fetch }: { fetcher?: typeof fetch }) {
 }
 
 export default function Home() {
+  const apiBase = useMemo(resolveApiBase, []);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [premiumStatus, setPremiumStatus] = useState<"unknown" | "free" | "premium">("unknown");
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [therapistModalOpen, setTherapistModalOpen] = useState(false);
+  const [therapistLocation, setTherapistLocation] = useState("");
+  const [therapistRadius, setTherapistRadius] = useState("");
+  const [therapistResults, setTherapistResults] = useState<ChatResponse["therapists"]>([]);
+  const [therapistError, setTherapistError] = useState<string | null>(null);
+  const [therapistLoading, setTherapistLoading] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -117,6 +156,68 @@ export default function Home() {
       listRef.current.scrollTop = listRef.current.scrollHeight;
     }
   }, [messages, isSending]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadMe = async () => {
+      try {
+        const res = await fetch(`${apiBase}/me`, { credentials: "include" });
+        if (res.status === 401) {
+          if (!cancelled) {
+            setIsAuthenticated(false);
+            setPremiumStatus("free");
+          }
+          return;
+        }
+        if (!res.ok) {
+          throw new Error("me_failed");
+        }
+        const data = await res.json();
+        if (!cancelled) {
+          setIsAuthenticated(true);
+          setPremiumStatus(data.is_premium ? "premium" : "free");
+        }
+      } catch {
+        if (!cancelled) {
+          setIsAuthenticated(false);
+          setPremiumStatus("free");
+          setError("Unable to load account status. Premium actions may be unavailable.");
+        }
+      }
+    };
+    loadMe();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiBase]);
+
+  const startCheckout = async () => {
+    if (!isAuthenticated) {
+      setError("Please sign in to continue.");
+      return;
+    }
+    setCheckoutLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${apiBase}/payments/create-checkout-session`, {
+        method: "POST",
+        credentials: "include"
+      });
+      if (!res.ok) {
+        throw new Error("checkout_failed");
+      }
+      const data = await res.json();
+      if (data?.url) {
+        window.location.href = data.url;
+      } else {
+        throw new Error("checkout_failed");
+      }
+    } catch {
+      setError("Unable to start checkout. Please try again.");
+    } finally {
+      setCheckoutLoading(false);
+    }
+  };
 
   const handleSend = async () => {
     const trimmed = input.trim();
@@ -131,7 +232,7 @@ export default function Home() {
     setIsSending(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/chat`, {
+      const res = await fetch(`${apiBase}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -147,13 +248,19 @@ export default function Home() {
         content: data.coach_message,
         exercise: data.exercise,
         resources: data.resources,
+        therapists: data.therapists,
         sources: data.sources,
         premium_cta: data.premium_cta,
         risk_level: data.risk_level
       };
       setMessages((prev) => [...prev, assistantMsg]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      const message = err instanceof Error ? err.message : "Something went wrong";
+      if (message === "Failed to fetch") {
+        setError(`Failed to reach backend at ${apiBase}`);
+      } else {
+        setError(message);
+      }
     } finally {
       setIsSending(false);
     }
@@ -164,11 +271,47 @@ export default function Home() {
       ? new URLSearchParams(window.location.search).get("auth_error")
       : null;
 
-  const crisisCTA = useMemo(() => {
+  const therapistCTA = useMemo(() => {
     const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
     if (!lastAssistant) return false;
-    return lastAssistant.risk_level === "crisis" || lastAssistant.premium_cta?.enabled;
+    const message = lastAssistant.premium_cta?.message?.toLowerCase() || "";
+    return lastAssistant.premium_cta?.enabled && message.includes("therapist");
   }, [messages]);
+
+  const handleTherapistSearch = async () => {
+    if (premiumStatus !== "premium") {
+      return;
+    }
+    if (!therapistLocation.trim()) {
+      setTherapistError("Please enter a city or postcode.");
+      return;
+    }
+    setTherapistLoading(true);
+    setTherapistError(null);
+    const radiusValue = therapistRadius ? Number(therapistRadius) : undefined;
+    const radius = Number.isFinite(radiusValue) ? radiusValue : undefined;
+    try {
+      const res = await fetch(`${apiBase}/therapists/search`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          location: therapistLocation.trim(),
+          radius_km: radius
+        })
+      });
+      if (!res.ok) {
+        throw new Error("Search failed.");
+      }
+      const data = (await res.json()) as { results: ChatResponse["therapists"] };
+      setTherapistResults(data.results || []);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Search failed.";
+      setTherapistError(message);
+    } finally {
+      setTherapistLoading(false);
+    }
+  };
 
   return (
     <main className="flex min-h-screen flex-col bg-slate-50 text-ink">
@@ -177,7 +320,25 @@ export default function Home() {
           <p className="text-xs uppercase tracking-[0.25em] text-ink/60">Mental Health Skills Coach</p>
           <h1 className="font-display text-2xl text-ink">Steadying routines, one chat at a time</h1>
         </div>
-        <StatusBadge />
+        <div className="flex items-center gap-3">
+          <StatusBadge apiBase={apiBase} />
+          {premiumStatus === "premium" ? (
+            <button
+              className="rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-semibold text-emerald-700"
+              disabled
+            >
+              Premium Active
+            </button>
+          ) : (
+            <button
+              className="rounded-full bg-ink px-4 py-2 text-xs font-semibold text-white shadow disabled:opacity-60"
+              onClick={startCheckout}
+              disabled={checkoutLoading || premiumStatus === "unknown"}
+            >
+              {checkoutLoading ? "Opening..." : premiumStatus === "unknown" ? "Checking..." : "Get Premium"}
+            </button>
+          )}
+        </div>
       </header>
 
       {authError && (
@@ -210,16 +371,100 @@ export default function Home() {
           </div>
         </div>
 
-        {crisisCTA && (
+        {therapistCTA && (
           <div className="mt-4">
             <button
               className="w-full rounded-xl bg-coral px-4 py-3 text-sm font-semibold text-white shadow hover:bg-coral/90"
               onClick={() => {
-                window.location.href = "/premium";
+                setTherapistModalOpen(true);
+                setTherapistResults([]);
+                setTherapistError(null);
               }}
             >
-              Find me a therapist (Premium)
+              Find me a therapist
             </button>
+          </div>
+        )}
+
+        {therapistModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 px-4">
+            <div className="w-full max-w-lg space-y-4 rounded-2xl bg-white p-5 shadow-xl">
+              <div className="flex items-center justify-between">
+                <h2 className="font-display text-lg text-ink">Therapist search</h2>
+                <button
+                  className="text-sm text-ink/60"
+                  onClick={() => setTherapistModalOpen(false)}
+                >
+                  Close
+                </button>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-semibold uppercase tracking-[0.15em] text-ink/60">
+                  City or postcode
+                </label>
+                <input
+                  value={therapistLocation}
+                  onChange={(e) => setTherapistLocation(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  placeholder="Stockholm"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-semibold uppercase tracking-[0.15em] text-ink/60">
+                  Radius (km, optional)
+                </label>
+                <input
+                  value={therapistRadius}
+                  onChange={(e) => setTherapistRadius(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  placeholder="10"
+                />
+              </div>
+              {therapistError && (
+                <div className="rounded-xl border border-coral/40 bg-coral/10 p-2 text-sm text-ink">
+                  {therapistError}
+                </div>
+              )}
+              <div className="flex flex-col items-end gap-2">
+                {premiumStatus === "premium" ? (
+                  <button
+                    className="rounded-full bg-ink px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                    onClick={handleTherapistSearch}
+                    disabled={therapistLoading}
+                  >
+                    {therapistLoading ? "Searching..." : "Search"}
+                  </button>
+                ) : (
+                  <button
+                    className="rounded-full bg-ink px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                    onClick={startCheckout}
+                    disabled={checkoutLoading}
+                  >
+                    {checkoutLoading ? "Opening..." : "Get Premium"}
+                  </button>
+                )}
+                {premiumStatus !== "premium" && (
+                  <p className="text-xs text-ink/60">Premium is required to search therapists.</p>
+                )}
+              </div>
+              {therapistResults && therapistResults.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink/60">Results</p>
+                  <ul className="space-y-2 text-sm">
+                    {therapistResults.map((therapist) => (
+                      <li key={`${therapist.name}-${therapist.address}`} className="rounded-xl border border-slate-200 p-3">
+                        <a className="font-semibold underline" href={therapist.url} target="_blank" rel="noreferrer">
+                          {therapist.name}
+                        </a>
+                        <p className="text-ink/70">{therapist.address}</p>
+                        <p className="text-ink/70">Distance: {therapist.distance_km} km</p>
+                        <p className="text-ink/70">Phone: {therapist.phone}</p>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -287,6 +532,24 @@ function ChatBubble({ message }: { message: Message }) {
                     {r.title}
                   </a>
                   {r.description && <p className="text-xs opacity-80">{r.description}</p>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {message.therapists && message.therapists.length > 0 && (
+          <div className="space-y-1">
+            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink/60">Therapists</p>
+            <ul className="space-y-2 text-sm">
+              {message.therapists.map((t) => (
+                <li key={`${t.name}-${t.address}`} className="rounded-lg border border-slate-200 p-2">
+                  <a className="font-semibold underline" href={t.url} target="_blank" rel="noreferrer">
+                    {t.name}
+                  </a>
+                  <p className="text-ink/70">{t.address}</p>
+                  <p className="text-ink/70">Distance: {t.distance_km} km</p>
+                  <p className="text-ink/70">Phone: {t.phone}</p>
                 </li>
               ))}
             </ul>

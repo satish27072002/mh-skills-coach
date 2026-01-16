@@ -58,6 +58,31 @@ docker compose exec backend python -c "from app.db import retrieve_similar_chunk
 3) Enter a prompt like "I feel anxious right now" and click "Send"
 4) You should see the coach message, exercise steps, and agent mode badge
 
+## Stripe Checkout (sandbox)
+Env placeholders live in `.env.example`. Set them in `.env`:
+- `STRIPE_SECRET_KEY=__PASTE_SK_TEST__`
+- `STRIPE_PRICE_ID=__PASTE_PRICE_ID__`
+- `STRIPE_WEBHOOK_SECRET=__PASTE_WHS__`
+- `FRONTEND_URL=http://localhost:3000`
+
+Stripe CLI webhook listener:
+```
+stripe listen --forward-to http://localhost:8000/payments/webhook
+```
+
+Manual verification:
+1) Start services: `docker compose up --build`
+2) In the UI, click "Get Premium" and complete the Stripe test checkout.
+3) After redirect to `/premium/success`, refresh the app and confirm "Premium Active".
+
+## Therapist search (premium)
+- Therapist search is gated behind premium. In chat, ask for a therapist and the UI will show a "Find me a therapist" button.
+- Mark a local user as premium, then use the UI button:
+```
+docker compose exec backend python -c "from app.db import SessionLocal; from app.models import User; s=SessionLocal(); u=s.query(User).first(); u.is_premium=True; s.commit()"
+```
+- The modal submits `POST /therapists/search` and renders returned providers.
+
 ## Google login (local)
 Set these env vars (backend):
 - GOOGLE_CLIENT_ID

@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import secrets
+import urllib.parse
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
@@ -16,11 +17,19 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import settings
-from .db import get_db, init_db
-from .mcp_client import suggest_providers
+from .agent_graph import run_agent
+from .db import get_db, init_db, pgvector_ready
+from .mcp_client import search_therapists
 from .models import StripeEvent, User
-from .safety import is_crisis, is_medical_request, route_message
-from .schemas import ChatRequest, ChatResponse, CheckoutSessionResponse
+from .safety import classify_intent, route_message
+from .schemas import (
+    ChatRequest,
+    ChatResponse,
+    CheckoutSessionResponse,
+    PremiumCta,
+    TherapistSearchRequest,
+    TherapistSearchResponse
+)
 
 
 @asynccontextmanager
@@ -39,25 +48,46 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-THERAPIST_KEYWORDS = [
-    "therapist",
-    "counselor",
-    "counsellor",
-    "professional help"
-]
-
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 
 
-def _has_therapist_intent(message: str) -> bool:
+def _extract_location(message: str) -> str | None:
     message_lower = message.lower()
-    return any(keyword in message_lower for keyword in THERAPIST_KEYWORDS)
+    for token in ["near ", "in ", "around ", "at "]:
+        if token in message_lower:
+            start = message_lower.index(token) + len(token)
+            return message[start:].strip(" .?")
+    return None
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+@app.get("/status")
+def status() -> dict[str, Any]:
+    pg_ready = pgvector_ready()
+    ollama_reachable = False
+    try:
+        response = httpx.get(f"{settings.ollama_base_url}/api/tags", timeout=0.8)
+        ollama_reachable = response.status_code == 200
+    except httpx.HTTPError:
+        ollama_reachable = False
+    agent_mode = "llm_rag" if ollama_reachable and pg_ready else "deterministic"
+    if not pg_ready:
+        reason = "pgvector not ready"
+    elif not ollama_reachable:
+        reason = "Ollama not reachable"
+    else:
+        reason = "LLM+RAG ready"
+    return {
+        "agent_mode": agent_mode,
+        "ollama_reachable": ollama_reachable,
+        "pgvector_ready": pg_ready,
+        "model": settings.ollama_model if ollama_reachable else None,
+        "reason": reason
+    }
 
 
 def _set_cookie(response: JSONResponse, name: str, value: str) -> None:
@@ -148,8 +178,17 @@ def auth_google_start() -> JSONResponse:
 def auth_google_callback(request: Request, db: Session = Depends(get_db)) -> Response:
     code = request.query_params.get("code")
     state = request.query_params.get("state")
+    error = request.query_params.get("error")
     stored_state = request.cookies.get("oauth_state")
     code_verifier = request.cookies.get("pkce_verifier")
+
+    if error:
+        redirect_url = settings.frontend_url or "http://localhost:3000"
+        safe_error = urllib.parse.quote(error, safe="")
+        return RedirectResponse(
+            url=f"{redirect_url.rstrip('/')}/?auth_error={safe_error}",
+            status_code=302
+        )
 
     if not code or not state or state != stored_state:
         raise HTTPException(status_code=400, detail="invalid oauth state")
@@ -204,19 +243,47 @@ def logout() -> JSONResponse:
     return response
 
 
+@app.post("/therapists/search", response_model=TherapistSearchResponse)
+def therapists_search(
+    payload: TherapistSearchRequest,
+    request: Request,
+    db: Session = Depends(get_db)
+) -> TherapistSearchResponse:
+    user = _get_user_from_cookie(db, request)
+    if not user:
+        raise HTTPException(status_code=401, detail="not authenticated")
+    if not user.is_premium:
+        raise HTTPException(status_code=403, detail="premium required")
+    results = search_therapists(payload.location, payload.radius_km)
+    return TherapistSearchResponse(results=results)
+
+
 @app.post("/chat", response_model=ChatResponse)
-def chat(payload: ChatRequest) -> ChatResponse:
-    if is_crisis(payload.message) or is_medical_request(payload.message):
+def chat(payload: ChatRequest, request: Request, db: Session = Depends(get_db)) -> ChatResponse:
+    intent = classify_intent(payload.message)
+
+    if intent in {"crisis", "prescription"}:
         return route_message(payload.message)
 
-    if _has_therapist_intent(payload.message):
-        providers = suggest_providers()
+    if intent == "therapist_search":
+        user = _get_user_from_cookie(db, request)
+        if not user or not user.is_premium:
+            return ChatResponse(
+                coach_message="Therapist search is available with premium access.",
+                premium_cta=PremiumCta(
+                    enabled=True,
+                    message="Unlock therapist search to see local providers."
+                )
+            )
+        location = _extract_location(payload.message) or "your area"
+        results = search_therapists(location, None)
         return ChatResponse(
-            coach_message="Here are curated options for professional support.",
-            resources=providers
+            coach_message=f"Here are therapist options near {location}.",
+            therapists=results
         )
 
-    return route_message(payload.message)
+    response_json = run_agent(payload.message)
+    return ChatResponse(**response_json)
 
 
 @app.post("/payments/create-checkout-session", response_model=CheckoutSessionResponse)
@@ -229,16 +296,41 @@ def create_checkout_session(request: Request, db: Session = Depends(get_db)) -> 
         return CheckoutSessionResponse(url="https://checkout.stripe.com/test/session")
 
     stripe.api_key = settings.stripe_secret_key
+    frontend_base = settings.frontend_url.rstrip("/")
     session = stripe.checkout.Session.create(
         mode="payment",
         line_items=[{"price": settings.stripe_price_id, "quantity": 1}],
-        success_url="http://localhost:3000/premium/success",
-        cancel_url="http://localhost:3000/premium/cancel",
+        success_url=f"{frontend_base}/premium/success?session_id={{CHECKOUT_SESSION_ID}}",
+        cancel_url=f"{frontend_base}/premium/cancel",
         client_reference_id=str(user.id),
         metadata={"user_id": str(user.id)}
     )
     return CheckoutSessionResponse(url=session.url)
 
+
+@app.get("/payments/session/{session_id}")
+def get_checkout_session(
+    session_id: str,
+    request: Request,
+    db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    user = _get_user_from_cookie(db, request)
+    if not user:
+        raise HTTPException(status_code=401, detail="not authenticated")
+    if not settings.stripe_secret_key:
+        raise HTTPException(status_code=501, detail="stripe not configured")
+
+    stripe.api_key = settings.stripe_secret_key
+    session = stripe.checkout.Session.retrieve(session_id)
+    metadata = session.get("metadata") or {}
+    user_id = metadata.get("user_id") or session.get("client_reference_id")
+    if user_id and str(user.id) != str(user_id):
+        raise HTTPException(status_code=403, detail="forbidden")
+    return {
+        "id": session.get("id"),
+        "status": session.get("status"),
+        "payment_status": session.get("payment_status")
+    }
 
 @app.post("/payments/webhook")
 async def stripe_webhook(request: Request, db: Session = Depends(get_db)) -> dict[str, str]:
@@ -266,7 +358,7 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)) -> dic
     if event.get("type") == "checkout.session.completed":
         session = event.get("data", {}).get("object", {})
         metadata = session.get("metadata", {})
-        user_id = metadata.get("user_id")
+        user_id = metadata.get("user_id") or session.get("client_reference_id")
         if user_id:
             user = db.get(User, int(user_id))
             if user:

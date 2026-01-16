@@ -22,11 +22,29 @@ class PremiumCta(BaseModel):
     message: str
 
 
+class TherapistResult(BaseModel):
+    name: str
+    address: str
+    url: str
+    phone: str
+    distance_km: float
+
+
+class TherapistSearchRequest(BaseModel):
+    location: str
+    radius_km: int | None = None
+
+
+class TherapistSearchResponse(BaseModel):
+    results: list[TherapistResult]
+
+
 class ChatResponse(BaseModel):
     coach_message: str
     exercise: Exercise | None = None
     resources: list[Resource] | None = None
     premium_cta: PremiumCta | None = None
+    therapists: list[TherapistResult] | None = None
 
 
 class CheckoutSessionResponse(BaseModel):

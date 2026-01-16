@@ -11,3 +11,5 @@ httpx==0.27.0
 jsonschema==4.23.0
 google-auth==2.33.0
 requests==2.32.3
+langgraph==0.2.39
+pypdf==4.2.0

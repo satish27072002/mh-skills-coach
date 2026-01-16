@@ -1,0 +1,52 @@
+{
+  "sources": [
+    {
+      "id": "who_pm_plus",
+      "title": "WHO Problem Management Plus (PM+) manual",
+      "url": "https://www.who.int/publications/i/item/9789241509571",
+      "year": 2016,
+      "type": "manual",
+      "tags": ["CBT", "problem solving", "stress"]
+    },
+    {
+      "id": "nhs_talking_therapies_manual",
+      "title": "NHS Talking Therapies Manual (v7.1)",
+      "url": "https://www.england.nhs.uk/publication/the-nhs-talking-therapies-manual/",
+      "year": 2022,
+      "type": "manual",
+      "tags": ["CBT", "guided self-help"]
+    },
+    {
+      "id": "nhs_guided_self_help",
+      "title": "NHS Guided Self-Help workbook (anxiety/depression)",
+      "url": "https://www.ntw.nhs.uk/content/uploads/2010/08/Self-Help-for-anxiety-and-depression.pdf",
+      "year": 2020,
+      "type": "workbook",
+      "tags": ["CBT", "anxiety", "depression"]
+    },
+    {
+      "id": "nhs_cbt_skills",
+      "title": "NHS CBT Skills booklet",
+      "url": "https://www.ntw.nhs.uk/selfhelp/",
+      "year": 2019,
+      "type": "workbook",
+      "tags": ["CBT", "coping skills"]
+    },
+    {
+      "id": "sweden_1177_suicidal_thoughts",
+      "title": "1177 Vardguiden: suicidal thoughts",
+      "url": "https://www.1177.se/Stockholm/liv--halsa/psykisk-halsa/att-ha-sjalvmordstankar/",
+      "year": 2025,
+      "type": "resource",
+      "tags": ["crisis", "Sweden"]
+    },
+    {
+      "id": "mind_sjalvmordslinjen",
+      "title": "Mind Sjalvmordslinjen",
+      "url": "https://mind.se/hitta-hjalp/sjalvmordslinjen/",
+      "year": 2025,
+      "type": "resource",
+      "tags": ["crisis", "Sweden"]
+    }
+  ]
+}

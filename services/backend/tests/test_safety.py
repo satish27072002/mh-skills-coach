@@ -13,7 +13,7 @@ def test_crisis_routing():
 
 def test_medical_refusal():
     response = route_message("Can you give me a diagnosis?")
-    assert response.premium_cta is not None
+    assert response.premium_cta is None
     assert "beyond my capability" in response.coach_message
 
 

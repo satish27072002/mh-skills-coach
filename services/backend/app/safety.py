@@ -1,4 +1,6 @@
-from .schemas import ChatResponse, Exercise, PremiumCta, Resource
+from typing import Literal
+
+from .schemas import ChatResponse, Exercise, Resource
 
 
 CRISIS_KEYWORDS = [
@@ -8,10 +10,29 @@ CRISIS_KEYWORDS = [
     "hurt myself",
     "end my life",
     "ending my life",
-    "harm myself"
+    "harm myself",
+    "suicidal",
+    "i want to die",
+    "want to die",
+    "end it all",
+    "can't go on",
+    "cannot go on",
+    "life isn't worth living"
 ]
 
-MEDICAL_KEYWORDS = [
+THERAPIST_SEARCH_KEYWORDS = [
+    "find therapist",
+    "find a therapist",
+    "therapist near me",
+    "book therapist",
+    "book a therapist",
+    "counsellor near me",
+    "counselor near me",
+    "find me a therapist"
+]
+
+PRESCRIPTION_KEYWORDS = [
+    "prescribe",
     "diagnosis",
     "diagnose",
     "prescription",
@@ -19,6 +40,8 @@ MEDICAL_KEYWORDS = [
     "meds",
     "antidepressant",
     "ssri",
+    "dose",
+    "dosage",
     "adhd",
     "bipolar"
 ]
@@ -33,8 +56,30 @@ def is_crisis(message: str) -> bool:
     return _contains_any(message, CRISIS_KEYWORDS)
 
 
-def is_medical_request(message: str) -> bool:
-    return _contains_any(message, MEDICAL_KEYWORDS)
+def is_therapist_search(message: str) -> bool:
+    if _contains_any(message, THERAPIST_SEARCH_KEYWORDS):
+        return True
+    message_lower = message.lower()
+    has_term = any(term in message_lower for term in ["therapist", "counselor", "counsellor"])
+    has_intent = any(term in message_lower for term in ["find", "near me", "book", "search"])
+    return has_term and has_intent
+
+
+def is_prescription_request(message: str) -> bool:
+    return _contains_any(message, PRESCRIPTION_KEYWORDS)
+
+
+Intent = Literal["crisis", "therapist_search", "prescription", "default"]
+
+
+def classify_intent(message: str) -> Intent:
+    if is_crisis(message):
+        return "crisis"
+    if is_therapist_search(message):
+        return "therapist_search"
+    if is_prescription_request(message):
+        return "prescription"
+    return "default"
 
 
 def route_message(message: str) -> ChatResponse:
@@ -51,7 +96,7 @@ def route_message(message: str) -> ChatResponse:
             ]
         )
 
-    if is_medical_request(message):
+    if is_prescription_request(message):
         return ChatResponse(
             coach_message=(
                 "This is beyond my capability. I cannot provide diagnosis, prescriptions, or medication advice. "
@@ -60,11 +105,7 @@ def route_message(message: str) -> ChatResponse:
             resources=[
                 Resource(title="Find a licensed professional", url="https://www.psychologytoday.com/"),
                 Resource(title="Therapy platforms", url="https://www.betterhelp.com/")
-            ],
-            premium_cta=PremiumCta(
-                enabled=True,
-                message="If you want extra coaching programs and guided skills, premium unlocks that."
-            )
+            ]
         )
 
     return ChatResponse(

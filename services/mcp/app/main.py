@@ -105,6 +105,26 @@ TOOL_RESPONSE_SCHEMAS = {
         },
         "required": ["providers"]
     },
+    "booking.search_therapists": {
+        "type": "object",
+        "properties": {
+            "therapists": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "address": {"type": "string"},
+                        "url": {"type": "string"},
+                        "phone": {"type": "string"},
+                        "distance_km": {"type": "number"}
+                    },
+                    "required": ["name", "address", "url", "phone", "distance_km"]
+                }
+            }
+        },
+        "required": ["therapists"]
+    },
     "payments.create_checkout_session": {
         "type": "object",
         "properties": {"url": {"type": "string"}},
@@ -192,6 +212,42 @@ def booking_suggest(request: ToolRequest) -> dict[str, Any]:
         ]
     }
     return {"result": _validate("booking.suggest_providers", payload)}
+
+
+def _mock_therapists(location: str) -> list[dict[str, Any]]:
+    normalized = location.strip() or "your area"
+    base_distance = max(1.0, min(12.0, len(normalized) * 0.3))
+    return [
+        {
+            "name": f"{normalized} Counseling Center",
+            "address": f"12 Main St, {normalized}",
+            "url": "https://example.com/therapy/center",
+            "phone": "+46 8 123 000",
+            "distance_km": round(base_distance, 1)
+        },
+        {
+            "name": f"{normalized} Wellbeing Clinic",
+            "address": f"45 Oak Ave, {normalized}",
+            "url": "https://example.com/therapy/clinic",
+            "phone": "+46 8 555 010",
+            "distance_km": round(base_distance + 1.8, 1)
+        },
+        {
+            "name": f"{normalized} Talk Therapy Studio",
+            "address": f"7 River Rd, {normalized}",
+            "url": "https://example.com/therapy/studio",
+            "phone": "+46 8 777 011",
+            "distance_km": round(base_distance + 3.4, 1)
+        }
+    ]
+
+
+@app.post("/tools/booking.search_therapists")
+def booking_search(request: ToolRequest) -> dict[str, Any]:
+    params = request.params or {}
+    location = str(params.get("location", "")).strip()
+    payload = {"therapists": _mock_therapists(location)}
+    return {"result": _validate("booking.search_therapists", payload)}
 
 
 @app.post("/tools/payments.create_checkout_session")
