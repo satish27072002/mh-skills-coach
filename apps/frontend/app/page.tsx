@@ -208,7 +208,7 @@ export default function Home() {
       }
       const data = await res.json();
       if (data?.url) {
-        window.location.href = data.url;
+        window.location.assign(data.url);
       } else {
         throw new Error("checkout_failed");
       }
@@ -271,13 +271,6 @@ export default function Home() {
       ? new URLSearchParams(window.location.search).get("auth_error")
       : null;
 
-  const therapistCTA = useMemo(() => {
-    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
-    if (!lastAssistant) return false;
-    const message = lastAssistant.premium_cta?.message?.toLowerCase() || "";
-    return lastAssistant.premium_cta?.enabled && message.includes("therapist");
-  }, [messages]);
-
   const handleTherapistSearch = async () => {
     if (premiumStatus !== "premium") {
       return;
@@ -322,6 +315,21 @@ export default function Home() {
         </div>
         <div className="flex items-center gap-3">
           <StatusBadge apiBase={apiBase} />
+          <button
+            className="rounded-full bg-coral px-4 py-2 text-xs font-semibold text-white shadow disabled:opacity-60"
+            onClick={() => {
+              if (premiumStatus === "premium") {
+                setTherapistModalOpen(true);
+                setTherapistResults([]);
+                setTherapistError(null);
+              } else {
+                startCheckout();
+              }
+            }}
+            disabled={checkoutLoading || premiumStatus === "unknown"}
+          >
+            {premiumStatus === "premium" ? "Find a therapist" : "Get Premium to find a therapist"}
+          </button>
           {premiumStatus === "premium" ? (
             <button
               className="rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-semibold text-emerald-700"
@@ -370,35 +378,6 @@ export default function Home() {
             {isSending && <div className="flex justify-start text-sm text-ink/60">Thinking...</div>}
           </div>
         </div>
-
-        {therapistCTA && (
-          <div className="mt-4">
-            {premiumStatus === "premium" ? (
-              <button
-                className="w-full rounded-xl bg-coral px-4 py-3 text-sm font-semibold text-white shadow hover:bg-coral/90"
-                onClick={() => {
-                  setTherapistModalOpen(true);
-                  setTherapistResults([]);
-                  setTherapistError(null);
-                }}
-              >
-                Find me a therapist
-              </button>
-            ) : (
-              <button
-                className="w-full rounded-xl bg-ink px-4 py-3 text-sm font-semibold text-white shadow hover:bg-ink/90 disabled:opacity-60"
-                onClick={startCheckout}
-                disabled={checkoutLoading || premiumStatus === "unknown"}
-              >
-                {checkoutLoading
-                  ? "Opening..."
-                  : premiumStatus === "unknown"
-                    ? "Checking..."
-                    : "Get Premium to find a therapist"}
-              </button>
-            )}
-          </div>
-        )}
 
         {therapistModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 px-4">

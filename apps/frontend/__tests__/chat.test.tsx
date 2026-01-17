@@ -44,7 +44,7 @@ describe("Chat UI", () => {
     });
   });
 
-  it("shows Get Premium CTA for therapist intent when user is free", async () => {
+  it("shows Get Premium therapist CTA in header when user is free", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
       if (url.includes("/me")) {
@@ -69,7 +69,7 @@ describe("Chat UI", () => {
         );
       }
       if (url.includes("/payments/create-checkout-session")) {
-        return Promise.resolve(new Response(JSON.stringify({ url: "http://example.com" }), { status: 200 }));
+        return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }));
       }
       return Promise.resolve(new Response("Not found", { status: 404 }));
     });
@@ -82,11 +82,10 @@ describe("Chat UI", () => {
     fireEvent.change(textarea, { target: { value: "find a therapist" } });
     fireEvent.click(screen.getByText("Send"));
 
-    await waitFor(() => {
-      expect(screen.getByText(/get premium to find a therapist/i)).toBeInTheDocument();
+    const therapistButton = await screen.findByRole("button", {
+      name: /get premium to find a therapist/i
     });
-
-    fireEvent.click(screen.getByText(/get premium to find a therapist/i));
+    fireEvent.click(therapistButton);
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -96,7 +95,7 @@ describe("Chat UI", () => {
     });
   });
 
-  it("shows therapist modal CTA when user is premium", async () => {
+  it("shows therapist modal CTA in header when user is premium", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
       if (url.includes("/me")) {
@@ -131,11 +130,10 @@ describe("Chat UI", () => {
     fireEvent.change(textarea, { target: { value: "find a therapist" } });
     fireEvent.click(screen.getByText("Send"));
 
-    await waitFor(() => {
-      expect(screen.getByText(/find me a therapist/i)).toBeInTheDocument();
+    const therapistButton = await screen.findByRole("button", {
+      name: /find a therapist/i
     });
-
-    fireEvent.click(screen.getByText(/find me a therapist/i));
+    fireEvent.click(therapistButton);
 
     await waitFor(() => {
       expect(screen.getByText(/therapist search/i)).toBeInTheDocument();

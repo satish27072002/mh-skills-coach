@@ -9,9 +9,9 @@ import httpx
 from .config import settings
 from .schemas import TherapistResult
 
-GEOCODE_TIMEOUT = httpx.Timeout(20.0, connect=5.0)
-OVERPASS_TIMEOUT = httpx.Timeout(20.0, connect=5.0)
-CACHE_TTL_SECONDS = 60 * 15
+GEOCODE_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
+OVERPASS_TIMEOUT = httpx.Timeout(25.0, connect=5.0)
+CACHE_TTL_SECONDS = 60 * 10
 
 _CACHE: dict[tuple[str, int], tuple[float, list[TherapistResult]]] = {}
 _REQUEST_TIMES: list[float] = []
@@ -32,14 +32,31 @@ def _allow_request() -> bool:
     return True
 
 
+def _nominatim_endpoint() -> str:
+    base = settings.nominatim_base_url.rstrip("/")
+    if base.endswith("/search"):
+        return base
+    return f"{base}/search"
+
+
+def _overpass_endpoint() -> str:
+    base = settings.overpass_base_url.rstrip("/")
+    if base.endswith("/api/interpreter"):
+        return base
+    return f"{base}/api/interpreter"
+
+
 def geocode_location(query: str) -> tuple[float, float] | None:
     if not query.strip():
         return None
     try:
         response = httpx.get(
-            f"{settings.nominatim_base_url}/search",
+            _nominatim_endpoint(),
             params={"q": query, "format": "json", "limit": 1},
-            headers={"User-Agent": settings.therapist_search_user_agent},
+            headers={
+                "User-Agent": settings.therapist_search_user_agent,
+                "Accept": "application/json"
+            },
             timeout=GEOCODE_TIMEOUT
         )
         response.raise_for_status()
@@ -64,22 +81,34 @@ def overpass_search(lat: float, lon: float, radius_m: int) -> list[dict[str, Any
       node["healthcare"="psychotherapist"](around:{radius_m},{lat},{lon});
       way["healthcare"="psychotherapist"](around:{radius_m},{lat},{lon});
       relation["healthcare"="psychotherapist"](around:{radius_m},{lat},{lon});
+      node["healthcare"="psychologist"](around:{radius_m},{lat},{lon});
+      way["healthcare"="psychologist"](around:{radius_m},{lat},{lon});
+      relation["healthcare"="psychologist"](around:{radius_m},{lat},{lon});
+      node["healthcare"="psychiatrist"](around:{radius_m},{lat},{lon});
+      way["healthcare"="psychiatrist"](around:{radius_m},{lat},{lon});
+      relation["healthcare"="psychiatrist"](around:{radius_m},{lat},{lon});
       node["healthcare"="counselling"](around:{radius_m},{lat},{lon});
       way["healthcare"="counselling"](around:{radius_m},{lat},{lon});
       relation["healthcare"="counselling"](around:{radius_m},{lat},{lon});
-      node["amenity"="doctors"]["healthcare:speciality"~"psych|psychiatry|psychotherapy",i](around:{radius_m},{lat},{lon});
-      way["amenity"="doctors"]["healthcare:speciality"~"psych|psychiatry|psychotherapy",i](around:{radius_m},{lat},{lon});
-      relation["amenity"="doctors"]["healthcare:speciality"~"psych|psychiatry|psychotherapy",i](around:{radius_m},{lat},{lon});
+      node["amenity"="clinic"]["healthcare:speciality"~"psych|psychiatry|psychotherapy",i](around:{radius_m},{lat},{lon});
+      way["amenity"="clinic"]["healthcare:speciality"~"psych|psychiatry|psychotherapy",i](around:{radius_m},{lat},{lon});
+      relation["amenity"="clinic"]["healthcare:speciality"~"psych|psychiatry|psychotherapy",i](around:{radius_m},{lat},{lon});
     );
     out center tags;
     """
     try:
         response = httpx.post(
-            f"{settings.overpass_base_url}/api/interpreter",
+            _overpass_endpoint(),
             content=query,
-            headers={"User-Agent": settings.therapist_search_user_agent},
+            headers={
+                "User-Agent": settings.therapist_search_user_agent,
+                "Accept": "application/json"
+            },
             timeout=OVERPASS_TIMEOUT
         )
+        if response.status_code == 429 or response.status_code >= 500:
+            time.sleep(1.0)
+            return []
         response.raise_for_status()
         payload = response.json()
     except httpx.RequestError:
@@ -99,9 +128,14 @@ def _format_address(tags: dict[str, Any]) -> str:
         parts.append(f"{street} {number}".strip() if number else street)
     city = tags.get("addr:city")
     postcode = tags.get("addr:postcode")
+    country = tags.get("addr:country") or tags.get("addr:country_code") or tags.get("country")
     locality = " ".join([part for part in [postcode, city] if part])
     if locality:
         parts.append(locality)
+    if not street and country and locality:
+        parts.append(country)
+    if not parts and (city or country):
+        return ", ".join([part for part in [city, country] if part])
     return ", ".join(parts) if parts else "Address unavailable"
 
 
@@ -129,7 +163,7 @@ def normalize_providers(
         tags = element.get("tags") or {}
         name = tags.get("name") or tags.get("brand") or "Therapist"
         address = _format_address(tags)
-        phone = tags.get("phone") or tags.get("contact:phone") or ""
+        phone = tags.get("phone") or tags.get("contact:phone") or "Phone unavailable"
         website = tags.get("website") or tags.get("contact:website")
         osm_url = f"https://www.openstreetmap.org/{element.get('type')}/{element.get('id')}"
         url = website or osm_url
@@ -145,18 +179,6 @@ def normalize_providers(
         )
     providers.sort(key=lambda provider: provider.distance_km)
     return providers[:limit]
-
-
-def _demo_providers(query: str) -> list[TherapistResult]:
-    return [
-        TherapistResult(
-            name=f"{query.title()} Counseling",
-            address=f"{query.title()} Center",
-            url="https://www.openstreetmap.org/",
-            phone="",
-            distance_km=0.5
-        )
-    ]
 
 
 def search_therapists(query: str, radius_km: int | None = None) -> list[TherapistResult]:
@@ -177,12 +199,10 @@ def search_therapists(query: str, radius_km: int | None = None) -> list[Therapis
     try:
         coords = geocode_location(query)
         if not coords:
-            return _demo_providers(query) if settings.demo_mode else []
+            return []
         lat, lon = coords
         elements = overpass_search(lat, lon, radius_m)
         providers = normalize_providers(elements, lat, lon, limit=settings.therapist_search_limit)
-        if not providers and settings.demo_mode:
-            providers = _demo_providers(query)
         _CACHE[cache_key] = (now, providers)
         return providers
     except httpx.RequestError:
