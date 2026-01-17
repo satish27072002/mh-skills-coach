@@ -7,6 +7,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://postgres:postgres@postgres:5432/mh"
     mcp_base_url: str = "http://mcp:7000"
     frontend_url: str = "http://localhost:3000"
+    nominatim_base_url: str = "https://nominatim.openstreetmap.org"
+    overpass_base_url: str = "https://overpass-api.de"
+    therapist_search_enabled: bool = True
+    therapist_search_user_agent: str = "mh-skills-coach/0.1 (dev)"
+    therapist_search_radius_km_default: int = 10
+    therapist_search_limit: int = 10
+    demo_mode: bool = False
     ollama_base_url: str = "http://ollama:11434"
     ollama_model: str = "gemma2:2b"
     ollama_embed_model: str = "nomic-embed-text"

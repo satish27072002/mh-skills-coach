@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .agent_graph import run_agent
 from .db import get_db, init_db, pgvector_ready
-from .mcp_client import search_therapists
+from .therapist_search import search_therapists
 from .models import StripeEvent, User
 from .safety import classify_intent, route_message
 from .schemas import (
@@ -277,6 +277,11 @@ def chat(payload: ChatRequest, request: Request, db: Session = Depends(get_db)) 
             )
         location = _extract_location(payload.message) or "your area"
         results = search_therapists(location, None)
+        if not results:
+            return ChatResponse(
+                coach_message=f"No providers were found near {location}. Try a nearby city or postcode.",
+                therapists=[]
+            )
         return ChatResponse(
             coach_message=f"Here are therapist options near {location}.",
             therapists=results

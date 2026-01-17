@@ -19,10 +19,10 @@ services:
       - ./data/papers:/data/papers:ro
     environment:
       - DATABASE_URL=postgresql+psycopg://postgres:postgres@postgres:5432/mh
-      - FRONTEND_URL=http://localhost:3000
-      - STRIPE_SECRET_KEY=
-      - STRIPE_WEBHOOK_SECRET=
-      - STRIPE_PRICE_ID=
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      - STRIPE_PRICE_ID=${STRIPE_PRICE_ID}
       - COOKIE_SECURE=false
     depends_on:
       - postgres
