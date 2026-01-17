@@ -9,8 +9,9 @@ from app.therapist_search import clear_cache, search_therapists
 
 
 class DummyResponse:
-    def __init__(self, payload):
+    def __init__(self, payload, status_code: int = 200):
         self._payload = payload
+        self.status_code = status_code
 
     def raise_for_status(self) -> None:
         return None
@@ -53,7 +54,7 @@ def test_therapist_search_geocode_overpass_happy_path(monkeypatch):
                         "id": 2,
                         "lat": 59.350,
                         "lon": 18.100,
-                        "tags": {"name": "Far Clinic"}
+                        "tags": {"name": "Far Clinic", "addr:city": "Stockholm", "addr:country": "Sweden"}
                     }
                 ]
             }
@@ -69,6 +70,8 @@ def test_therapist_search_geocode_overpass_happy_path(monkeypatch):
     assert results[0].address.startswith("Main St")
     assert "example.com" not in results[0].url
     assert results[0].url.startswith("https://")
+    assert results[1].address == "Stockholm, Sweden"
+    assert results[1].phone == "Phone unavailable"
     assert results[0].distance_km <= results[1].distance_km
     assert "your area" not in results[0].name.lower()
 
@@ -89,13 +92,54 @@ def test_therapist_search_no_results(monkeypatch):
 
 
 def test_therapist_search_timeout(monkeypatch):
-    from app.therapist_search import clear_cache
-    clear_cache()
-
     def fake_get(*args, **kwargs):
         raise httpx.ReadTimeout("timeout")
 
     monkeypatch.setattr("app.therapist_search.httpx.get", fake_get)
+
+    results = search_therapists("Stockholm", radius_km=5)
+
+    assert results == []
+
+
+def test_therapist_search_geocode_failure_returns_empty(monkeypatch):
+    monkeypatch.setattr("app.therapist_search.httpx.get", lambda *args, **kwargs: DummyResponse([]))
+
+    def fail_post(*_args, **_kwargs):
+        raise AssertionError("Overpass should not be called when geocode fails.")
+
+    monkeypatch.setattr("app.therapist_search.httpx.post", fail_post)
+
+    results = search_therapists("Unknown", radius_km=5)
+
+    assert results == []
+
+
+def test_therapist_search_overpass_timeout(monkeypatch):
+    monkeypatch.setattr(
+        "app.therapist_search.httpx.get",
+        lambda *args, **kwargs: DummyResponse([{"lat": "59.3300", "lon": "18.0600"}])
+    )
+
+    def fake_post(*_args, **_kwargs):
+        raise httpx.ReadTimeout("timeout")
+
+    monkeypatch.setattr("app.therapist_search.httpx.post", fake_post)
+
+    results = search_therapists("Stockholm", radius_km=5)
+
+    assert results == []
+
+
+def test_therapist_search_overpass_rate_limited(monkeypatch):
+    monkeypatch.setattr(
+        "app.therapist_search.httpx.get",
+        lambda *args, **kwargs: DummyResponse([{"lat": "59.3300", "lon": "18.0600"}])
+    )
+    monkeypatch.setattr(
+        "app.therapist_search.httpx.post",
+        lambda *args, **kwargs: DummyResponse({"elements": []}, status_code=429)
+    )
 
     results = search_therapists("Stockholm", radius_km=5)
 
