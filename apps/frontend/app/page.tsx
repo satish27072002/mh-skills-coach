@@ -373,16 +373,30 @@ export default function Home() {
 
         {therapistCTA && (
           <div className="mt-4">
-            <button
-              className="w-full rounded-xl bg-coral px-4 py-3 text-sm font-semibold text-white shadow hover:bg-coral/90"
-              onClick={() => {
-                setTherapistModalOpen(true);
-                setTherapistResults([]);
-                setTherapistError(null);
-              }}
-            >
-              Find me a therapist
-            </button>
+            {premiumStatus === "premium" ? (
+              <button
+                className="w-full rounded-xl bg-coral px-4 py-3 text-sm font-semibold text-white shadow hover:bg-coral/90"
+                onClick={() => {
+                  setTherapistModalOpen(true);
+                  setTherapistResults([]);
+                  setTherapistError(null);
+                }}
+              >
+                Find me a therapist
+              </button>
+            ) : (
+              <button
+                className="w-full rounded-xl bg-ink px-4 py-3 text-sm font-semibold text-white shadow hover:bg-ink/90 disabled:opacity-60"
+                onClick={startCheckout}
+                disabled={checkoutLoading || premiumStatus === "unknown"}
+              >
+                {checkoutLoading
+                  ? "Opening..."
+                  : premiumStatus === "unknown"
+                    ? "Checking..."
+                    : "Get Premium to find a therapist"}
+              </button>
+            )}
           </div>
         )}
 
