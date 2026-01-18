@@ -35,13 +35,31 @@ describe("Chat UI", () => {
 
     render(React.createElement(Home));
 
-    const textarea = screen.getByPlaceholderText(/i feel anxious/i);
+    const textarea = await screen.findByPlaceholderText(/i feel anxious/i);
     fireEvent.change(textarea, { target: { value: "hello" } });
     fireEvent.click(screen.getByText("Send"));
 
     await waitFor(() => {
       expect(screen.getByText(/thanks for sharing/i)).toBeInTheDocument();
     });
+  });
+
+  it("shows login screen when unauthenticated", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/me")) {
+        return Promise.resolve(new Response("Unauthorized", { status: 401 }));
+      }
+      return Promise.resolve(new Response("Not found", { status: 404 }));
+    });
+
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    render(React.createElement(Home));
+
+    const loginButton = await screen.findByRole("button", { name: /continue with google/i });
+    expect(loginButton).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/i feel anxious/i)).toBeNull();
   });
 
   it("shows Get Premium therapist CTA in header when user is free", async () => {
@@ -78,7 +96,7 @@ describe("Chat UI", () => {
 
     render(React.createElement(Home));
 
-    const textarea = screen.getByPlaceholderText(/i feel anxious/i);
+    const textarea = await screen.findByPlaceholderText(/i feel anxious/i);
     fireEvent.change(textarea, { target: { value: "find a therapist" } });
     fireEvent.click(screen.getByText("Send"));
 
@@ -126,7 +144,7 @@ describe("Chat UI", () => {
 
     render(React.createElement(Home));
 
-    const textarea = screen.getByPlaceholderText(/i feel anxious/i);
+    const textarea = await screen.findByPlaceholderText(/i feel anxious/i);
     fireEvent.change(textarea, { target: { value: "find a therapist" } });
     fireEvent.click(screen.getByText("Send"));
 

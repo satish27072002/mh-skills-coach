@@ -33,17 +33,50 @@ THERAPIST_SEARCH_KEYWORDS = [
 
 PRESCRIPTION_KEYWORDS = [
     "prescribe",
-    "diagnosis",
-    "diagnose",
     "prescription",
     "medication",
+    "medicine",
     "meds",
-    "antidepressant",
-    "ssri",
+    "mg",
+    "pill",
+    "pills",
+    "tablet",
+    "capsule",
     "dose",
     "dosage",
-    "adhd",
-    "bipolar"
+    "side effect",
+    "side effects",
+    "withdrawal",
+    "taper",
+    "tapering",
+    "overdose",
+    "antidepressant",
+    "ssri",
+    "benzodiazepine",
+    "benzo",
+    "xanax",
+    "diazepam",
+    "prozac",
+    "sertraline",
+    "zoloft",
+    "citalopram",
+    "escitalopram",
+    "fluoxetine",
+    "venlafaxine",
+    "duloxetine",
+    "sleeping pill",
+    "sleeping pills",
+    "painkiller",
+    "ibuprofen",
+    "paracetamol",
+    "acetaminophen",
+    "antibiotic",
+    "opioid",
+    "adderall",
+    "ritalin",
+    "vyvanse",
+    "diagnosis",
+    "diagnose"
 ]
 
 
@@ -93,19 +126,23 @@ def route_message(message: str) -> ChatResponse:
             resources=[
                 Resource(title="Emergency services (Sweden)", url="https://www.112.se/"),
                 Resource(title="Find local crisis lines", url="https://www.iasp.info/resources/Crisis_Centres/")
-            ]
+            ],
+            risk_level="crisis"
         )
 
     if is_prescription_request(message):
         return ChatResponse(
             coach_message=(
-                "This is beyond my capability. I cannot provide diagnosis, prescriptions, or medication advice. "
-                "A licensed professional can help you with that."
+                "I can't help with prescriptions, dosing, or medication changes. Please contact a licensed clinician "
+                "or pharmacist. If you think you may be in danger (e.g., overdose, severe reaction), call your local "
+                "emergency number now (Sweden: 112). If you want support finding a therapist, use the "
+                "'Find a therapist' button."
             ),
             resources=[
-                Resource(title="Find a licensed professional", url="https://www.psychologytoday.com/"),
-                Resource(title="Therapy platforms", url="https://www.betterhelp.com/")
-            ]
+                Resource(title="Emergency services (Sweden)", url="https://www.112.se/"),
+                Resource(title="Healthcare advice (Sweden)", url="https://www.1177.se/")
+            ],
+            risk_level="crisis"
         )
 
     return ChatResponse(

@@ -141,6 +141,7 @@ export default function Home() {
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authStatus, setAuthStatus] = useState<"loading" | "authed" | "unauthed">("loading");
   const [premiumStatus, setPremiumStatus] = useState<"unknown" | "free" | "premium">("unknown");
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [therapistModalOpen, setTherapistModalOpen] = useState(false);
@@ -160,12 +161,16 @@ export default function Home() {
   useEffect(() => {
     let cancelled = false;
     const loadMe = async () => {
+      if (!cancelled) {
+        setAuthStatus("loading");
+      }
       try {
         const res = await fetch(`${apiBase}/me`, { credentials: "include" });
         if (res.status === 401) {
           if (!cancelled) {
             setIsAuthenticated(false);
             setPremiumStatus("free");
+            setAuthStatus("unauthed");
           }
           return;
         }
@@ -176,12 +181,14 @@ export default function Home() {
         if (!cancelled) {
           setIsAuthenticated(true);
           setPremiumStatus(data.is_premium ? "premium" : "free");
+          setAuthStatus("authed");
         }
       } catch {
         if (!cancelled) {
           setIsAuthenticated(false);
           setPremiumStatus("free");
           setError("Unable to load account status. Premium actions may be unavailable.");
+          setAuthStatus("unauthed");
         }
       }
     };
@@ -306,6 +313,46 @@ export default function Home() {
     }
   };
 
+  if (authStatus === "loading") {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center bg-slate-50 text-ink">
+        <div className="rounded-2xl border border-slate-200 bg-white px-8 py-6 text-center shadow-sm">
+          <h1 className="font-display text-2xl">Mental Health Skills Coach</h1>
+          <p className="mt-2 text-sm text-ink/70">Checking session…</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (authStatus === "unauthed") {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center bg-slate-50 text-ink">
+        <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white px-8 py-6 text-center shadow-sm">
+          <h1 className="font-display text-2xl">Mental Health Skills Coach</h1>
+          <p className="mt-2 text-sm text-ink/70">Sign in to continue</p>
+          {authError && (
+            <div className="mt-4 rounded-xl border border-coral/40 bg-coral/10 p-3 text-sm text-ink">
+              Google sign-in was canceled or failed. Please try again.
+            </div>
+          )}
+          {error && (
+            <div className="mt-4 rounded-xl border border-coral/40 bg-coral/10 p-3 text-sm text-ink">
+              {error}
+            </div>
+          )}
+          <button
+            className="mt-5 w-full rounded-full bg-ink px-4 py-3 text-sm font-semibold text-white shadow hover:bg-ink/90"
+            onClick={() => {
+              window.location.href = `${apiBase}/auth/google/start`;
+            }}
+          >
+            Continue with Google
+          </button>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="flex min-h-screen flex-col bg-slate-50 text-ink">
       <header className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-4">
@@ -348,12 +395,6 @@ export default function Home() {
           )}
         </div>
       </header>
-
-      {authError && (
-        <div className="mx-4 mt-4 rounded-xl border border-coral/40 bg-coral/10 p-3 text-sm text-ink">
-          Google sign-in was canceled or failed. Please try again.
-        </div>
-      )}
 
       {error && (
         <div className="mx-4 mt-4 rounded-xl border border-coral/40 bg-coral/10 p-3 text-sm text-ink">

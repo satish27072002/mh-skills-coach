@@ -5,8 +5,8 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        display: ["Gill Sans", "Trebuchet MS", "Calibri", "sans-serif"],
-        body: ["Georgia", "Times New Roman", "serif"]
+        sans: ["var(--font-inter)", "system-ui", "sans-serif"],
+        display: ["var(--font-jakarta)", "system-ui", "sans-serif"]
       },
       colors: {
         ink: "#1f2937",

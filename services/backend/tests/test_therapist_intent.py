@@ -75,5 +75,7 @@ def test_prescription_request_does_not_trigger_paywall(test_db):
 
     assert response.status_code == 200
     payload = response.json()
-    assert "cannot provide" in payload["coach_message"].lower()
+    assert "prescriptions" in payload["coach_message"].lower()
+    assert "clinician" in payload["coach_message"].lower()
+    assert payload["risk_level"] == "crisis"
     assert payload.get("premium_cta") is None

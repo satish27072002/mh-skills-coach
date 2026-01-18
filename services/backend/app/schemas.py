@@ -45,6 +45,7 @@ class ChatResponse(BaseModel):
     resources: list[Resource] | None = None
     premium_cta: PremiumCta | None = None
     therapists: list[TherapistResult] | None = None
+    risk_level: str | None = None
 
 
 class CheckoutSessionResponse(BaseModel):

@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import json
+import logging
 import secrets
 import urllib.parse
 from contextlib import asynccontextmanager
@@ -50,6 +51,7 @@ app.add_middleware(
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
+logger = logging.getLogger(__name__)
 
 
 def _extract_location(message: str) -> str | None:
@@ -90,7 +92,7 @@ def status() -> dict[str, Any]:
     }
 
 
-def _set_cookie(response: JSONResponse, name: str, value: str) -> None:
+def _set_cookie(response: Response, name: str, value: str) -> None:
     response.set_cookie(
         name,
         value,
@@ -112,7 +114,7 @@ def _code_challenge(code_verifier: str) -> str:
     return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
 
-def _exchange_code_for_id_token(code: str, code_verifier: str) -> str:
+def _exchange_code_for_tokens(code: str, code_verifier: str) -> tuple[dict[str, Any], int]:
     data = {
         "code": code,
         "client_id": settings.google_client_id,
@@ -127,14 +129,10 @@ def _exchange_code_for_id_token(code: str, code_verifier: str) -> str:
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="google token exchange failed") from exc
 
-    payload = response.json()
-    id_token = payload.get("id_token")
-    if not id_token:
-        raise HTTPException(status_code=400, detail="missing id_token")
-    return id_token
+    return response.json(), response.status_code
 
 
-def _verify_id_token(id_token: str) -> dict[str, Any]:
+def _verify_id_token(id_token: str, token_keys: list[str]) -> dict[str, Any]:
     try:
         claims = google_id_token.verify_oauth2_token(
             id_token,
@@ -142,15 +140,18 @@ def _verify_id_token(id_token: str) -> dict[str, Any]:
             settings.google_client_id
         )
     except ValueError as exc:
+        logger.warning("Google id_token verification failed: %s (token_keys=%s)", exc, token_keys)
         raise HTTPException(status_code=400, detail="invalid id_token") from exc
 
     if claims.get("iss") not in GOOGLE_ISSUERS:
+        logger.warning("Google id_token invalid issuer: %s", claims.get("iss"))
         raise HTTPException(status_code=400, detail="invalid token issuer")
+    logger.info("Google id_token claims: iss=%s aud=%s", claims.get("iss"), claims.get("aud"))
     return claims
 
 
 @app.get("/auth/google/start")
-def auth_google_start() -> JSONResponse:
+def auth_google_start() -> Response:
     if not settings.google_client_id:
         return JSONResponse(status_code=501, content={"error": "google oauth not configured"})
 
@@ -168,7 +169,7 @@ def auth_google_start() -> JSONResponse:
         f"&code_challenge={challenge}"
     )
 
-    response = JSONResponse(content={"auth_url": auth_url})
+    response = RedirectResponse(url=auth_url, status_code=302)
     _set_cookie(response, "pkce_verifier", code_verifier)
     _set_cookie(response, "oauth_state", state)
     return response
@@ -206,8 +207,35 @@ def auth_google_callback(request: Request, db: Session = Depends(get_db)) -> Res
         _set_cookie(response, settings.session_cookie_name, str(user.id))
         return response
 
-    id_token = _exchange_code_for_id_token(code, code_verifier)
-    claims = _verify_id_token(id_token)
+    try:
+        token_json, token_status = _exchange_code_for_tokens(code, code_verifier)
+    except HTTPException as exc:
+        logger.warning("Google token exchange failed: %s", exc.detail)
+        return RedirectResponse(
+            url=f"{settings.frontend_url.rstrip('/')}/?auth_error=token_exchange_failed",
+            status_code=302
+        )
+
+    id_token = token_json.get("id_token")
+    if not id_token:
+        logger.warning(
+            "Google token response missing id_token (status=%s token_keys=%s)",
+            token_status,
+            list(token_json.keys())
+        )
+        return RedirectResponse(
+            url=f"{settings.frontend_url.rstrip('/')}/?auth_error=id_token_missing",
+            status_code=302
+        )
+
+    try:
+        claims = _verify_id_token(id_token, list(token_json.keys()))
+    except HTTPException as exc:
+        logger.warning("Google id_token invalid: %s", exc.detail)
+        return RedirectResponse(
+            url=f"{settings.frontend_url.rstrip('/')}/?auth_error=id_token_invalid",
+            status_code=302
+        )
     email = claims.get("email")
     if not email:
         raise HTTPException(status_code=400, detail="missing email")
