@@ -1,5 +1,44 @@
 # Mental Health Skills Coach (Portfolio Project)
 
+## Path A deployment (Cloudflare Pages + Tunnel)
+This setup hosts the frontend on Cloudflare Pages at `https://app.<domain>` while the backend stays on your machine and is exposed via Cloudflare Tunnel at `https://api.<domain>`. It keeps hosting free, avoids public backend ports, and is easy to migrate later by moving the backend container to a VM or managed service in AWS/GCP.
+
+## Deployment steps (Path A)
+1) Cloudflare Pages (frontend)
+   - Create a Pages project from this repo.
+   - Framework preset: Next.js.
+   - Build command: `npm run build`
+   - Output directory: `.next` (or leave default for Next.js).
+   - Set environment variable: `NEXT_PUBLIC_API_BASE_URL=https://api.<domain>`
+   - Add custom domain: `app.<domain>`
+2) Cloudflare Tunnel (backend)
+   - In Cloudflare Zero Trust, create a named tunnel.
+   - Add a public hostname: `api.<domain>` with service `http://backend:8000`.
+   - Copy the tunnel token.
+3) Backend environment variables
+   - Copy `.env.example` to `.env` and fill in values:
+     - `FRONTEND_URL=https://app.<domain>`
+     - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`
+     - `GOOGLE_REDIRECT_URI=https://api.<domain>/auth/google/callback`
+     - `STRIPE_SECRET_KEY`, `STRIPE_PRICE_ID`, `STRIPE_WEBHOOK_SECRET`
+     - `COOKIE_SECURE=true`
+     - `CLOUDFLARED_TOKEN=...`
+4) Google OAuth
+   - Update the OAuth client redirect URI to `https://api.<domain>/auth/google/callback`.
+5) Stripe (test mode)
+   - Create a one-time price.
+   - Add webhook endpoint: `https://api.<domain>/payments/webhook`.
+   - Copy `STRIPE_WEBHOOK_SECRET`.
+6) Run the stack
+   - Local only (no tunnel): `docker compose up --build`
+   - With tunnel: `docker compose --profile tunnel up --build`
+
+## Security posture
+- HTTPS enforced by Cloudflare on both app and api domains.
+- Secure HttpOnly cookies with `COOKIE_SECURE=true` in deployed mode.
+- CORS allowlist includes `FRONTEND_URL` and localhost dev origins with credentials enabled.
+- Backend port binds to `127.0.0.1` and is only exposed via Cloudflare Tunnel.
+
 ## Run locally
 From the repo root:
 ```
@@ -16,6 +55,7 @@ From the repo root:
 ```
 docker compose up -d --build
 docker compose exec backend python -m pytest -q
+docker compose exec frontend npm test -- --run
 docker compose down
 ```
 
@@ -39,8 +79,8 @@ Pull the embeddings model:
 docker compose exec ollama ollama pull nomic-embed-text
 ```
 Set env vars:
-- OLLAMA_EMBED_MODEL=nomic-embed-text
-- EMBEDDING_DIM must match the embedding model dimension.
+- `OLLAMA_EMBED_MODEL=nomic-embed-text`
+- `EMBEDDING_DIM` must match the embedding model dimension.
 
 Ingest local papers (PDF/TXT) from `data/papers/`:
 ```
@@ -85,10 +125,10 @@ docker compose exec backend python -c "from app.db import SessionLocal; from app
 
 ## Google login (local)
 Set these env vars (backend):
-- GOOGLE_CLIENT_ID
-- GOOGLE_CLIENT_SECRET
-- GOOGLE_REDIRECT_URI (default: http://localhost:8000/auth/google/callback)
-- FRONTEND_URL (default: http://localhost:3000)
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_REDIRECT_URI` (default: http://localhost:8000/auth/google/callback)
+- `FRONTEND_URL` (default: http://localhost:3000)
 Note: If you cancel Google consent, you'll be returned to the app with an error banner.
 
 ## Demo script

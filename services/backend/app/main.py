@@ -41,9 +41,26 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="mh-skills-backend", lifespan=lifespan)
 
+def _build_cors_origins(frontend_url: str) -> list[str]:
+    candidates = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://frontend:3000"
+    ]
+    if frontend_url:
+        candidates.append(frontend_url.rstrip("/"))
+    origins: list[str] = []
+    seen: set[str] = set()
+    for origin in candidates:
+        if origin and origin not in seen:
+            origins.append(origin)
+            seen.add(origin)
+    return origins
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://frontend:3000"],
+    allow_origins=_build_cors_origins(settings.frontend_url),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
