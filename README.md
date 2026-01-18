@@ -1,6 +1,6 @@
 # Mental Health Skills Coach (Portfolio Project)
 
-## Path A deployment (Cloudflare Pages + Tunnel)
+## deployment (Cloudflare Pages + Tunnel)
 This setup hosts the frontend on Cloudflare Pages at `https://app.<domain>` while the backend stays on your machine and is exposed via Cloudflare Tunnel at `https://api.<domain>`. It keeps hosting free, avoids public backend ports, and is easy to migrate later by moving the backend container to a VM or managed service in AWS/GCP.
 
 ## Deployment steps (Path A)
