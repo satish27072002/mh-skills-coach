@@ -42,11 +42,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="mh-skills-backend", lifespan=lifespan)
 
 def _build_cors_origins(frontend_url: str) -> list[str]:
-    candidates = [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://frontend:3000"
-    ]
+    candidates = ["http://localhost:3000"]
     if frontend_url:
         candidates.append(frontend_url.rstrip("/"))
     origins: list[str] = []
@@ -110,12 +106,17 @@ def status() -> dict[str, Any]:
 
 
 def _set_cookie(response: Response, name: str, value: str) -> None:
+    samesite = settings.cookie_samesite.lower()
+    secure = settings.cookie_secure
+    if samesite == "none" and not secure:
+        logger.warning("COOKIE_SAMESITE=None requires COOKIE_SECURE=true; forcing secure")
+        secure = True
     response.set_cookie(
         name,
         value,
         httponly=True,
-        secure=settings.cookie_secure,
-        samesite="lax"
+        secure=secure,
+        samesite=samesite
     )
 
 
@@ -149,15 +150,42 @@ def _exchange_code_for_tokens(code: str, code_verifier: str) -> tuple[dict[str, 
     return response.json(), response.status_code
 
 
+def _decode_jwt_claims(token: str) -> dict[str, Any]:
+    claims = {"iss": None, "aud": None, "exp": None, "iat": None}
+    parts = token.split(".")
+    if len(parts) < 2:
+        return claims
+    payload_b64 = parts[1]
+    padding = "=" * (-len(payload_b64) % 4)
+    try:
+        payload_bytes = base64.urlsafe_b64decode(payload_b64 + padding)
+        payload = json.loads(payload_bytes.decode("utf-8"))
+    except (ValueError, json.JSONDecodeError) as exc:
+        logger.debug("JWT payload decode failed: %s", exc)
+        return claims
+    if isinstance(payload, dict):
+        for key in claims:
+            if key in payload:
+                claims[key] = payload.get(key)
+    return claims
+
+
 def _verify_id_token(id_token: str, token_keys: list[str]) -> dict[str, Any]:
     try:
         claims = google_id_token.verify_oauth2_token(
             id_token,
             GoogleRequest(),
-            settings.google_client_id
+            settings.google_client_id,
+            clock_skew_in_seconds=10,
         )
     except ValueError as exc:
-        logger.warning("Google id_token verification failed: %s (token_keys=%s)", exc, token_keys)
+        safe_claims = _decode_jwt_claims(id_token)
+        logger.warning(
+            "Google id_token verification failed: %s (decoded_claims=%s, token_keys=%s)",
+            exc,
+            safe_claims,
+            token_keys
+        )
         raise HTTPException(status_code=400, detail="invalid id_token") from exc
 
     if claims.get("iss") not in GOOGLE_ISSUERS:
@@ -232,6 +260,15 @@ def auth_google_callback(request: Request, db: Session = Depends(get_db)) -> Res
             url=f"{settings.frontend_url.rstrip('/')}/?auth_error=token_exchange_failed",
             status_code=302
         )
+
+    token_key_flags = {
+        "id_token": "id_token" in token_json,
+        "access_token": "access_token" in token_json,
+        "refresh_token": "refresh_token" in token_json,
+        "token_type": "token_type" in token_json,
+        "scope": "scope" in token_json
+    }
+    logger.info("Google token exchange response keys: %s", token_key_flags)
 
     id_token = token_json.get("id_token")
     if not id_token:

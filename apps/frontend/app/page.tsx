@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type ChatResponse = {
   coach_message: string;
@@ -40,37 +40,7 @@ type StatusState = {
   backend: "online" | "offline";
 };
 
-const defaultApiBase =
-  typeof window === "undefined"
-    ? "http://backend:8000"
-    : window.location.hostname === "localhost"
-      ? "http://localhost:8000"
-      : "http://backend:8000";
-
-const envApiBase =
-  process.env.NEXT_PUBLIC_API_BASE_URL ||
-  process.env.NEXT_PUBLIC_API_BASE ||
-  "";
-
-const resolveApiBase = () => {
-  let base = envApiBase || defaultApiBase;
-  if (
-    typeof window !== "undefined" &&
-    window.location.hostname === "localhost" &&
-    base.includes("backend:8000")
-  ) {
-    base = "http://localhost:8000";
-  }
-  return base;
-};
-
-export function StatusBadge({
-  fetcher = fetch,
-  apiBase = resolveApiBase()
-}: {
-  fetcher?: typeof fetch;
-  apiBase?: string;
-}) {
+export function StatusBadge({ fetcher = fetch }: { fetcher?: typeof fetch }) {
   const [status, setStatus] = useState<StatusState>({
     mode: null,
     model: null,
@@ -82,13 +52,13 @@ export function StatusBadge({
 
     const load = async () => {
       try {
-        const res = await fetcher(`${apiBase}/status`, { credentials: "include" });
+        const res = await fetcher("/api/status", { credentials: "include" });
         if (!res.ok) throw new Error("bad status");
         const data = await res.json();
         if (!cancelled) {
           setStatus({
             mode: (data.agent_mode as StatusState["mode"]) ?? "deterministic",
-            model: data.model ?? "unknown",
+            model: data.model ?? null,
             backend: "online"
           });
         }
@@ -105,12 +75,12 @@ export function StatusBadge({
       cancelled = true;
       clearInterval(interval);
     };
-  }, [fetcher, apiBase]);
+  }, [fetcher]);
 
   if (status.backend === "offline") {
     return (
       <div className="rounded-full bg-coral/15 px-4 py-2 text-xs font-semibold text-coral">
-        Backend: offline
+        API: offline
       </div>
     );
   }
@@ -135,13 +105,12 @@ export function StatusBadge({
 }
 
 export default function Home() {
-  const apiBase = useMemo(resolveApiBase, []);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [authStatus, setAuthStatus] = useState<"loading" | "authed" | "unauthed">("loading");
+  const [authStatus, setAuthStatus] = useState<"loading" | "ready">("loading");
   const [premiumStatus, setPremiumStatus] = useState<"unknown" | "free" | "premium">("unknown");
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [therapistModalOpen, setTherapistModalOpen] = useState(false);
@@ -165,12 +134,14 @@ export default function Home() {
         setAuthStatus("loading");
       }
       try {
-        const res = await fetch(`${apiBase}/me`, { credentials: "include" });
+        const res = await fetch("/api/me", { credentials: "include" });
         if (res.status === 401) {
           if (!cancelled) {
             setIsAuthenticated(false);
             setPremiumStatus("free");
-            setAuthStatus("unauthed");
+          }
+          if (typeof window !== "undefined") {
+            window.location.assign("/login");
           }
           return;
         }
@@ -181,14 +152,14 @@ export default function Home() {
         if (!cancelled) {
           setIsAuthenticated(true);
           setPremiumStatus(data.is_premium ? "premium" : "free");
-          setAuthStatus("authed");
+          setAuthStatus("ready");
         }
       } catch {
         if (!cancelled) {
           setIsAuthenticated(false);
           setPremiumStatus("free");
           setError("Unable to load account status. Premium actions may be unavailable.");
-          setAuthStatus("unauthed");
+          setAuthStatus("ready");
         }
       }
     };
@@ -196,7 +167,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [apiBase]);
+  }, []);
 
   const startCheckout = async () => {
     if (!isAuthenticated) {
@@ -206,7 +177,7 @@ export default function Home() {
     setCheckoutLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${apiBase}/payments/create-checkout-session`, {
+      const res = await fetch("/api/payments/create-checkout-session", {
         method: "POST",
         credentials: "include"
       });
@@ -239,7 +210,7 @@ export default function Home() {
     setIsSending(true);
     setError(null);
     try {
-      const res = await fetch(`${apiBase}/chat`, {
+      const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -264,7 +235,7 @@ export default function Home() {
     } catch (err) {
       const message = err instanceof Error ? err.message : "Something went wrong";
       if (message === "Failed to fetch") {
-        setError(`Failed to reach backend at ${apiBase}`);
+        setError("Failed to reach the API.");
       } else {
         setError(message);
       }
@@ -272,11 +243,6 @@ export default function Home() {
       setIsSending(false);
     }
   };
-
-  const authError =
-    typeof window !== "undefined"
-      ? new URLSearchParams(window.location.search).get("auth_error")
-      : null;
 
   const handleTherapistSearch = async () => {
     if (premiumStatus !== "premium") {
@@ -291,7 +257,7 @@ export default function Home() {
     const radiusValue = therapistRadius ? Number(therapistRadius) : undefined;
     const radius = Number.isFinite(radiusValue) ? radiusValue : undefined;
     try {
-      const res = await fetch(`${apiBase}/therapists/search`, {
+      const res = await fetch("/api/therapists/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -324,35 +290,6 @@ export default function Home() {
     );
   }
 
-  if (authStatus === "unauthed") {
-    return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-slate-50 text-ink">
-        <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white px-8 py-6 text-center shadow-sm">
-          <h1 className="font-display text-2xl">Mental Health Skills Coach</h1>
-          <p className="mt-2 text-sm text-ink/70">Sign in to continue</p>
-          {authError && (
-            <div className="mt-4 rounded-xl border border-coral/40 bg-coral/10 p-3 text-sm text-ink">
-              Google sign-in was canceled or failed. Please try again.
-            </div>
-          )}
-          {error && (
-            <div className="mt-4 rounded-xl border border-coral/40 bg-coral/10 p-3 text-sm text-ink">
-              {error}
-            </div>
-          )}
-          <button
-            className="mt-5 w-full rounded-full bg-ink px-4 py-3 text-sm font-semibold text-white shadow hover:bg-ink/90"
-            onClick={() => {
-              window.location.href = `${apiBase}/auth/google/start`;
-            }}
-          >
-            Continue with Google
-          </button>
-        </div>
-      </main>
-    );
-  }
-
   return (
     <main className="flex min-h-screen flex-col bg-slate-50 text-ink">
       <header className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-4">
@@ -361,7 +298,7 @@ export default function Home() {
           <h1 className="font-display text-2xl text-ink">Steadying routines, one chat at a time</h1>
         </div>
         <div className="flex items-center gap-3">
-          <StatusBadge apiBase={apiBase} />
+          <StatusBadge />
           <button
             className="rounded-full bg-coral px-4 py-2 text-xs font-semibold text-white shadow disabled:opacity-60"
             onClick={() => {

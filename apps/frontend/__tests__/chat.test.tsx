@@ -10,17 +10,17 @@ describe("Chat UI", () => {
   it("sends a message and renders assistant reply", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
-      if (url.includes("/me")) {
+      if (url.includes("/api/me")) {
         return Promise.resolve(
           new Response(JSON.stringify({ is_premium: false }), { status: 200 })
         );
       }
-      if (url.includes("/status")) {
+      if (url.includes("/api/status")) {
         return Promise.resolve(
           new Response(JSON.stringify({ agent_mode: "deterministic", model: "demo" }), { status: 200 })
         );
       }
-      if (url.includes("/chat")) {
+      if (url.includes("/api/chat")) {
         return Promise.resolve(
           new Response(
             JSON.stringify({ coach_message: "Thanks for sharing.", resources: [], premium_cta: null }),
@@ -44,38 +44,41 @@ describe("Chat UI", () => {
     });
   });
 
-  it("shows login screen when unauthenticated", async () => {
+  it("redirects to login when unauthenticated", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
-      if (url.includes("/me")) {
+      if (url.includes("/api/me")) {
         return Promise.resolve(new Response("Unauthorized", { status: 401 }));
       }
       return Promise.resolve(new Response("Not found", { status: 404 }));
     });
 
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const assignSpy = vi.spyOn(window.location, "assign").mockImplementation(() => undefined);
 
     render(React.createElement(Home));
 
-    const loginButton = await screen.findByRole("button", { name: /continue with google/i });
-    expect(loginButton).toBeInTheDocument();
-    expect(screen.queryByPlaceholderText(/i feel anxious/i)).toBeNull();
+    await waitFor(() => {
+      expect(assignSpy).toHaveBeenCalledWith("/login");
+    });
+
+    assignSpy.mockRestore();
   });
 
   it("shows Get Premium therapist CTA in header when user is free", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
-      if (url.includes("/me")) {
+      if (url.includes("/api/me")) {
         return Promise.resolve(
           new Response(JSON.stringify({ is_premium: false }), { status: 200 })
         );
       }
-      if (url.includes("/status")) {
+      if (url.includes("/api/status")) {
         return Promise.resolve(
           new Response(JSON.stringify({ agent_mode: "deterministic", model: "demo" }), { status: 200 })
         );
       }
-      if (url.includes("/chat")) {
+      if (url.includes("/api/chat")) {
         return Promise.resolve(
           new Response(
             JSON.stringify({
@@ -86,7 +89,7 @@ describe("Chat UI", () => {
           )
         );
       }
-      if (url.includes("/payments/create-checkout-session")) {
+      if (url.includes("/api/payments/create-checkout-session")) {
         return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }));
       }
       return Promise.resolve(new Response("Not found", { status: 404 }));
@@ -107,7 +110,7 @@ describe("Chat UI", () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("/payments/create-checkout-session"),
+        expect.stringContaining("/api/payments/create-checkout-session"),
         expect.objectContaining({ method: "POST", credentials: "include" })
       );
     });
@@ -116,17 +119,17 @@ describe("Chat UI", () => {
   it("shows therapist modal CTA in header when user is premium", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
-      if (url.includes("/me")) {
+      if (url.includes("/api/me")) {
         return Promise.resolve(
           new Response(JSON.stringify({ is_premium: true }), { status: 200 })
         );
       }
-      if (url.includes("/status")) {
+      if (url.includes("/api/status")) {
         return Promise.resolve(
           new Response(JSON.stringify({ agent_mode: "deterministic", model: "demo" }), { status: 200 })
         );
       }
-      if (url.includes("/chat")) {
+      if (url.includes("/api/chat")) {
         return Promise.resolve(
           new Response(
             JSON.stringify({

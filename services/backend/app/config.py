@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     google_redirect_uri: str = "http://localhost:8000/auth/google/callback"
     session_cookie_name: str = "mh_session"
     cookie_secure: bool = False
+    cookie_samesite: str = "lax"  # "lax" for localhost, "none" for tunnel/https
+
 
 
 settings = Settings()
