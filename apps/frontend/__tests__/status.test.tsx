@@ -1,6 +1,6 @@
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
-import { StatusBadge } from "../app/page";
+import StatusBadge from "../components/StatusBadge";
 
 describe("StatusBadge", () => {
   it("renders mode badge from /status response", async () => {

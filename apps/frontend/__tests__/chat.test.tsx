@@ -2,9 +2,16 @@ import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import Home from "../app/page";
 
+const replaceMock = vi.hoisted(() => vi.fn());
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: replaceMock })
+}));
+
 describe("Chat UI", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    replaceMock.mockReset();
   });
 
   it("sends a message and renders assistant reply", async () => {
@@ -54,15 +61,12 @@ describe("Chat UI", () => {
     });
 
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const assignSpy = vi.spyOn(window.location, "assign").mockImplementation(() => undefined);
 
     render(React.createElement(Home));
 
     await waitFor(() => {
-      expect(assignSpy).toHaveBeenCalledWith("/login");
+      expect(replaceMock).toHaveBeenCalledWith("/login");
     });
-
-    assignSpy.mockRestore();
   });
 
   it("shows Get Premium therapist CTA in header when user is free", async () => {

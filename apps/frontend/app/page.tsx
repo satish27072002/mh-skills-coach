@@ -1,110 +1,13 @@
 ﻿"use client";
 
 import { useEffect, useRef, useState } from "react";
-
-type ChatResponse = {
-  coach_message: string;
-  exercise?: {
-    type: string;
-    steps: string[];
-    duration_seconds: number;
-  };
-  resources?: { title: string; url: string; description?: string }[];
-  premium_cta?: { enabled: boolean; message: string };
-  therapists?: {
-    name: string;
-    address: string;
-    url: string;
-    phone: string;
-    distance_km: number;
-  }[];
-  sources?: { source_id: string; text?: string; snippet?: string }[];
-  risk_level?: string;
-};
-
-type Message = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  exercise?: ChatResponse["exercise"];
-  resources?: ChatResponse["resources"];
-  therapists?: ChatResponse["therapists"];
-  sources?: ChatResponse["sources"];
-  premium_cta?: ChatResponse["premium_cta"];
-  risk_level?: string;
-};
-
-type StatusState = {
-  mode: "deterministic" | "llm_rag" | null;
-  model: string | null;
-  backend: "online" | "offline";
-};
-
-export function StatusBadge({ fetcher = fetch }: { fetcher?: typeof fetch }) {
-  const [status, setStatus] = useState<StatusState>({
-    mode: null,
-    model: null,
-    backend: "online"
-  });
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const load = async () => {
-      try {
-        const res = await fetcher("/api/status", { credentials: "include" });
-        if (!res.ok) throw new Error("bad status");
-        const data = await res.json();
-        if (!cancelled) {
-          setStatus({
-            mode: (data.agent_mode as StatusState["mode"]) ?? "deterministic",
-            model: data.model ?? null,
-            backend: "online"
-          });
-        }
-      } catch {
-        if (!cancelled) {
-          setStatus({ mode: null, model: null, backend: "offline" });
-        }
-      }
-    };
-
-    load();
-    const interval = setInterval(load, 10000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [fetcher]);
-
-  if (status.backend === "offline") {
-    return (
-      <div className="rounded-full bg-coral/15 px-4 py-2 text-xs font-semibold text-coral">
-        API: offline
-      </div>
-    );
-  }
-
-  const modeText = status.mode === "llm_rag" ? "LLM+RAG enabled." : "Deterministic safety mode: LLM disabled.";
-
-  return (
-    <div className="flex items-center gap-3 text-xs">
-      <div
-        className={`rounded-full px-3 py-1 text-white ${
-          status.mode === "llm_rag" ? "bg-emerald-600" : "bg-slate-600"
-        }`}
-        title={modeText}
-      >
-        Mode: {status.mode === "llm_rag" ? "LLM+RAG" : "Deterministic"}
-      </div>
-      {status.model && (
-        <span className="rounded-full border border-ink/10 px-3 py-1 text-ink">Model: {status.model}</span>
-      )}
-    </div>
-  );
-}
+import { useRouter } from "next/navigation";
+import ChatBubble from "../components/ChatBubble";
+import StatusBadge from "../components/StatusBadge";
+import type { ChatResponse, Message } from "../components/chat-types";
 
 export default function Home() {
+  const router = useRouter();
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [isSending, setIsSending] = useState(false);
@@ -140,9 +43,7 @@ export default function Home() {
             setIsAuthenticated(false);
             setPremiumStatus("free");
           }
-          if (typeof window !== "undefined") {
-            window.location.assign("/login");
-          }
+          router.replace("/login");
           return;
         }
         if (!res.ok) {
@@ -466,88 +367,5 @@ export default function Home() {
         </div>
       </div>
     </main>
-  );
-}
-
-function ChatBubble({ message }: { message: Message }) {
-  const isUser = message.role === "user";
-  return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-      <div
-        className={`max-w-[80%] space-y-3 rounded-2xl px-4 py-3 text-sm shadow ${
-          isUser ? "bg-ink text-white" : "bg-slate-100 text-ink"
-        }`}
-      >
-        <p className="whitespace-pre-wrap">{message.content}</p>
-
-        {message.exercise && (
-          <div className="space-y-1">
-            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink/60">
-              {message.exercise.type} - {message.exercise.duration_seconds}s
-            </p>
-            <ul className={`list-disc pl-4 ${isUser ? "text-white/80" : "text-ink/80"}`}>
-              {message.exercise.steps.map((step) => (
-                <li key={step}>{step}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {message.resources && message.resources.length > 0 && (
-          <div className="space-y-1">
-            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink/60">Resources</p>
-            <ul className="space-y-1">
-              {message.resources.map((r) => (
-                <li key={r.url}>
-                  <a className="underline underline-offset-4" href={r.url} target="_blank" rel="noreferrer">
-                    {r.title}
-                  </a>
-                  {r.description && <p className="text-xs opacity-80">{r.description}</p>}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {message.therapists && message.therapists.length > 0 && (
-          <div className="space-y-1">
-            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink/60">Therapists</p>
-            <ul className="space-y-2 text-sm">
-              {message.therapists.map((t) => (
-                <li key={`${t.name}-${t.address}`} className="rounded-lg border border-slate-200 p-2">
-                  <a className="font-semibold underline" href={t.url} target="_blank" rel="noreferrer">
-                    {t.name}
-                  </a>
-                  <p className="text-ink/70">{t.address}</p>
-                  <p className="text-ink/70">Distance: {t.distance_km} km</p>
-                  <p className="text-ink/70">Phone: {t.phone}</p>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {message.sources && message.sources.length > 0 && (
-          <details className="rounded-lg border border-slate-200 bg-white/80 p-2 text-ink">
-            <summary className="cursor-pointer text-xs font-semibold">Sources</summary>
-            <ul className="space-y-1 pt-2 text-xs">
-              {message.sources.map((s, idx) => (
-                <li key={`${s.source_id}-${idx}`}>
-                  <p className="font-semibold">{s.source_id}</p>
-                  <p className="whitespace-pre-wrap text-ink/70">{s.snippet || s.text || "Excerpt unavailable."}</p>
-                </li>
-              ))}
-            </ul>
-          </details>
-        )}
-
-        {message.premium_cta?.enabled && (
-          <div className="rounded-lg border border-coral/40 bg-coral/10 p-2 text-ink">
-            <p className="text-xs font-semibold uppercase tracking-[0.15em]">Premium</p>
-            <p>{message.premium_cta.message}</p>
-          </div>
-        )}
-      </div>
-    </div>
   );
 }
