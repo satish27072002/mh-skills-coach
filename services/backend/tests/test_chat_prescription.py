@@ -15,7 +15,10 @@ def test_chat_prescription_routes_to_crisis_message():
     assert response.status_code == 200
     payload = response.json()
     assert "prescriptions" in payload["coach_message"]
+    assert "beyond my capability" in payload["coach_message"]
     assert "clinician" in payload["coach_message"]
     assert "112" in payload["coach_message"]
+    assert payload["premium_cta"]["enabled"] is True
+    assert "Premium" in payload["premium_cta"]["message"]
     assert payload["risk_level"] == "crisis"
     assert payload.get("exercise") is None

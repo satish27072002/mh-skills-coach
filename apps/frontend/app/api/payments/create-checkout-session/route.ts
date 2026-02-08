@@ -1,13 +1,27 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "../../_lib/auth";
+import {
+  copyCookieHeader,
+  getBackendBaseUrl,
+  proxyJsonResponse
+} from "../../_lib/backend";
 
 export const runtime = "nodejs";
 
-export async function POST() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
+export async function POST(request: Request) {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  const cookieHeader = copyCookieHeader(request);
+  if (cookieHeader) {
+    headers.cookie = cookieHeader;
   }
-  return NextResponse.json({ url: "/premium/success" });
+
+  try {
+    const backendRes = await fetch(`${getBackendBaseUrl()}/payments/create-checkout-session`, {
+      method: "POST",
+      headers,
+      cache: "no-store"
+    });
+    return proxyJsonResponse(backendRes);
+  } catch {
+    return NextResponse.json({ detail: "Backend unavailable" }, { status: 502 });
+  }
 }

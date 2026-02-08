@@ -1,6 +1,6 @@
 from typing import Literal
 
-from .schemas import ChatResponse, Exercise, Resource
+from .schemas import ChatResponse, Exercise, PremiumCta, Resource
 
 
 CRISIS_KEYWORDS = [
@@ -133,15 +133,21 @@ def route_message(message: str) -> ChatResponse:
     if is_prescription_request(message):
         return ChatResponse(
             coach_message=(
-                "I can't help with prescriptions, dosing, or medication changes. Please contact a licensed clinician "
-                "or pharmacist. If you think you may be in danger (e.g., overdose, severe reaction), call your local "
-                "emergency number now (Sweden: 112). If you want support finding a therapist, use the "
-                "'Find a therapist' button."
+                "This is beyond my capability. I can't help with prescriptions, dosing, or medication changes. "
+                "Please contact a licensed clinician or pharmacist. If you think you may be in danger "
+                "(e.g., overdose, severe reaction), call your local emergency number now (Sweden: 112)."
             ),
             resources=[
                 Resource(title="Emergency services (Sweden)", url="https://www.112.se/"),
-                Resource(title="Healthcare advice (Sweden)", url="https://www.1177.se/")
+                Resource(title="Healthcare advice (Sweden)", url="https://www.1177.se/"),
+                Resource(title="Mindler", url="https://www.mindler.se/"),
+                Resource(title="Kry", url="https://www.kry.se/"),
+                Resource(title="Psychology Today", url="https://www.psychologytoday.com/")
             ],
+            premium_cta=PremiumCta(
+                enabled=True,
+                message="Premium unlocks extra coaching features and therapist directory access."
+            ),
             risk_level="crisis"
         )
 

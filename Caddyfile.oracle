@@ -1,10 +1,13 @@
-:8080 {
+{$APP_DOMAIN} {
+  encode gzip zstd
+
   @backend path /health /chat /me /status /docs* /openapi.json /auth/* /payments/* /therapists/*
   reverse_proxy @backend backend:8000 {
     header_up Host {host}
     header_up X-Forwarded-Host {host}
     header_up X-Forwarded-Proto {scheme}
   }
+
   reverse_proxy frontend:3000 {
     header_up Host {host}
     header_up X-Forwarded-Host {host}

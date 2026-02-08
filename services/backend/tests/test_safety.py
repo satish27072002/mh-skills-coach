@@ -14,9 +14,13 @@ def test_crisis_routing():
 
 def test_medical_refusal():
     response = route_message("Can you give me a diagnosis?")
-    assert response.premium_cta is None
+    assert response.premium_cta is not None
+    assert response.premium_cta.enabled is True
+    assert "Premium" in response.premium_cta.message
+    assert "beyond my capability" in response.coach_message
     assert "prescriptions" in response.coach_message
     assert "clinician" in response.coach_message
+    assert any("mindler.se" in resource.url for resource in response.resources or [])
     assert response.risk_level == "crisis"
 
 

@@ -78,4 +78,4 @@ def test_prescription_request_does_not_trigger_paywall(test_db):
     assert "prescriptions" in payload["coach_message"].lower()
     assert "clinician" in payload["coach_message"].lower()
     assert payload["risk_level"] == "crisis"
-    assert payload.get("premium_cta") is None
+    assert payload["premium_cta"]["enabled"] is True

@@ -1,12 +1,11 @@
 "use client";
 
-import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 
 export default function LoginClient() {
   const params = useSearchParams();
   const error = params.get("error");
-  const redirect = params.get("redirect") || "/";
+  const authStartUrl = "/api/auth/google/start";
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-slate-50 text-ink">
@@ -20,7 +19,9 @@ export default function LoginClient() {
         )}
         <button
           className="mt-5 w-full rounded-full bg-ink px-4 py-3 text-sm font-semibold text-white shadow hover:bg-ink/90"
-          onClick={() => signIn("google", { callbackUrl: redirect })}
+          onClick={() => {
+            window.location.assign(authStartUrl);
+          }}
         >
           Continue with Google
         </button>

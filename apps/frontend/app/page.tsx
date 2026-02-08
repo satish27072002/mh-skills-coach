@@ -43,7 +43,12 @@ export default function Home() {
             setIsAuthenticated(false);
             setPremiumStatus("free");
           }
-          router.replace("/login");
+          const params = new URLSearchParams(window.location.search);
+          const authError = params.get("auth_error");
+          const nextLoginUrl = authError
+            ? `/login?error=${encodeURIComponent(authError)}`
+            : "/login";
+          router.replace(nextLoginUrl);
           return;
         }
         if (!res.ok) {

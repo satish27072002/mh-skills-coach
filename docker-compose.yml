@@ -4,8 +4,13 @@ services:
       context: ./apps/frontend
     ports:
       - "3000:3000"
+    env_file:
+      - .env
     environment:
-      - NEXT_PUBLIC_API_BASE_URL=https://hydraulic-finish-fallen-lib.trycloudflare.com
+      - API_BASE_URL=http://backend:8000
+      - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
     depends_on:
       - backend
   proxy:
@@ -28,7 +33,7 @@ services:
       - ./data/papers:/data/papers:ro
     environment:
       - DATABASE_URL=postgresql+psycopg://postgres:postgres@postgres:5432/mh
-      - FRONTEND_URL=${FRONTEND_URL:-https://bay-elizabeth-antibody-skirts.trycloudflare.com}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000/}
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
       - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
       - STRIPE_PRICE_ID=${STRIPE_PRICE_ID}

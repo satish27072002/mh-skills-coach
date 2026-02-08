@@ -6,11 +6,16 @@ A safety-gated mental health skills coach that guides grounding and coping exerc
 ## Key features
 - Crisis and self-harm safety routing with immediate resources
 - Diagnosis/prescription refusal flow with professional help guidance
-- Google sign-in with secure sessions
-- Premium-gated therapist search and checkout stub for demos
+- Google OIDC Authorization Code flow with PKCE and HttpOnly cookies
+- Stripe test-mode one-time lifetime checkout + webhook idempotency
+- Premium-gated therapist search
 
 ## Tech stack
-Next.js (App Router), NextAuth, FastAPI (local dev), OpenStreetMap Nominatim/Overpass, Stripe (test mode).
+Next.js (App Router), FastAPI, MCP server, Postgres/pgvector, Stripe (test mode), Docker Compose.
+
+## Deployment readiness
+This application is deployment-ready for a VM-based setup (including Oracle Cloud VM) using Docker Compose and Caddy.
+It is not currently deployed only due to resource constraints, not because of a known functional blocker in the codebase.
 
 ## Live URL
 <URL>

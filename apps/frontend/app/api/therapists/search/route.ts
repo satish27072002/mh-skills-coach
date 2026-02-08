@@ -1,18 +1,13 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "../../_lib/auth";
-import { searchTherapists } from "../../_lib/therapist-search";
+import {
+  copyCookieHeader,
+  getBackendBaseUrl,
+  proxyJsonResponse
+} from "../../_lib/backend";
 
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
-  }
-  if (!session.is_premium) {
-    return NextResponse.json({ detail: "Premium required" }, { status: 403 });
-  }
   let payload: { location?: string; radius_km?: number } = {};
   try {
     payload = (await request.json()) as { location?: string; radius_km?: number };
@@ -28,6 +23,28 @@ export async function POST(request: Request) {
     typeof radiusRaw === "number" && Number.isFinite(radiusRaw)
       ? Math.max(1, Math.min(50, radiusRaw))
       : undefined;
-  const results = await searchTherapists(location, radius);
-  return NextResponse.json({ results });
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json"
+  };
+  const cookieHeader = copyCookieHeader(request);
+  if (cookieHeader) {
+    headers.cookie = cookieHeader;
+  }
+
+  try {
+    const backendRes = await fetch(`${getBackendBaseUrl()}/therapists/search`, {
+      method: "POST",
+      headers,
+      cache: "no-store",
+      body: JSON.stringify({
+        location,
+        radius_km: radius
+      })
+    });
+    return proxyJsonResponse(backendRes);
+  } catch {
+    return NextResponse.json({ detail: "Backend unavailable" }, { status: 502 });
+  }
 }
