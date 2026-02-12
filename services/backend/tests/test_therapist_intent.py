@@ -45,7 +45,8 @@ def test_therapist_search_returns_results_for_premium(monkeypatch, test_db):
         session.commit()
         session.refresh(user)
 
-    def stub_search(_location, _radius):
+    def stub_search(location_text, radius_km=None, specialty=None, limit=5):
+        assert location_text
         return [
             TherapistResult(
                 name="Stockholm Therapy",
@@ -56,7 +57,7 @@ def test_therapist_search_returns_results_for_premium(monkeypatch, test_db):
             )
         ]
 
-    monkeypatch.setattr("app.main.search_therapists", stub_search)
+    monkeypatch.setattr("app.main.mcp_therapist_search", stub_search)
     client = TestClient(app)
     client.cookies.set(settings.session_cookie_name, str(user.id))
 

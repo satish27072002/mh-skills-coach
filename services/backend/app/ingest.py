@@ -9,6 +9,7 @@ from pypdf import PdfReader
 from sqlalchemy import text
 
 from . import db
+from .embed_dimension import get_active_embedding_dim
 from .embeddings import get_embedding
 
 
@@ -55,6 +56,8 @@ def ingest_paths(
     embed_fn=get_embedding
 ) -> int:
     db.init_db()
+    active_dim = get_active_embedding_dim()
+    db.ensure_embedding_dimension_compatible()
     inserted_chunks = 0
     with db.engine.begin() as conn:
         if reset:
@@ -91,6 +94,11 @@ def ingest_paths(
             document_id = result.scalar_one()
             for index, chunk in enumerate(chunks):
                 embedding = embed_fn(chunk)
+                if len(embedding) != active_dim:
+                    raise RuntimeError(
+                        f"Embedding dimension {len(embedding)} does not match active "
+                        f"dimension {active_dim}. Update provider config and reindex."
+                    )
                 metadata = json.dumps({"source_id": source_id})
                 conn.execute(
                     text(

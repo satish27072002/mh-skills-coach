@@ -5,7 +5,9 @@ import logging
 import secrets
 import urllib.parse
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any, AsyncIterator
+from zoneinfo import ZoneInfo
 
 import httpx
 import stripe
@@ -19,11 +21,33 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .agent_graph import run_agent
-from .db import get_db, init_db, pgvector_ready
-from .therapist_search import search_therapists
+from .booking import (
+    BOOKING_TTL_MINUTES,
+    STOCKHOLM_TZ,
+    build_booking_email_content,
+    clear_pending_booking,
+    extract_booking_data,
+    is_affirmative,
+    is_booking_intent,
+    is_negative,
+    load_pending_booking,
+    parse_pending_payload,
+    save_pending_booking,
+)
+from .db import ensure_embedding_dimension_compatible, get_db, init_db, pgvector_ready
+from .embed_dimension import get_active_embedding_dim, get_cached_embedding_dim
+from .email_orchestrator import EmailSendPayload, send_email_for_user
+from .llm.provider import (
+    ConfigurationError,
+    probe_ollama_connectivity,
+    probe_openai_connectivity,
+    validate_provider_configuration,
+)
+from .mcp_client import mcp_therapist_search, probe_mcp_health
 from .models import StripeEvent, User
-from .safety import classify_intent, route_message
+from .safety import classify_intent, is_prescription_request, route_message, is_crisis
 from .schemas import (
+    BookingProposal,
     ChatRequest,
     ChatResponse,
     CheckoutSessionResponse,
@@ -35,7 +59,17 @@ from .schemas import (
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    try:
+        validate_provider_configuration()
+        get_active_embedding_dim()
+    except ConfigurationError as exc:
+        logger.critical("Invalid provider configuration: %s", exc)
+        raise
+    except RuntimeError as exc:
+        logger.critical("Invalid embedding configuration: %s", exc)
+        raise
     init_db()
+    ensure_embedding_dimension_compatible()
     yield
 
 
@@ -65,6 +99,7 @@ app.add_middleware(
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 logger = logging.getLogger(__name__)
+UTC = ZoneInfo("UTC")
 
 
 def _extract_location(message: str) -> str | None:
@@ -76,31 +111,93 @@ def _extract_location(message: str) -> str | None:
     return None
 
 
+def _pending_payload_complete(payload: dict[str, str | None]) -> bool:
+    return bool(
+        payload.get("therapist_email")
+        and payload.get("requested_datetime_iso")
+        and payload.get("subject")
+        and payload.get("body")
+    )
+
+
+def _requested_time_display(requested_datetime_iso: str) -> str:
+    parsed = datetime.fromisoformat(requested_datetime_iso)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=STOCKHOLM_TZ)
+    else:
+        parsed = parsed.astimezone(STOCKHOLM_TZ)
+    return f"{parsed.strftime('%Y-%m-%d %H:%M')} Europe/Stockholm"
+
+
+def _booking_proposal_from_payload(
+    payload: dict[str, str | None],
+    expires_at: datetime
+) -> BookingProposal:
+    requested_datetime_iso = payload.get("requested_datetime_iso") or ""
+    expires_display_dt = expires_at.astimezone(STOCKHOLM_TZ) if expires_at.tzinfo else expires_at.replace(tzinfo=UTC).astimezone(STOCKHOLM_TZ)
+    return BookingProposal(
+        therapist_email=payload.get("therapist_email") or "",
+        requested_time=_requested_time_display(requested_datetime_iso),
+        subject=payload.get("subject") or "",
+        body=payload.get("body") or "",
+        expires_at=expires_display_dt.isoformat()
+    )
+
+
+def _missing_booking_fields_message(payload: dict[str, str | None], clarification: str | None = None) -> str:
+    missing = []
+    if not payload.get("therapist_email"):
+        missing.append("therapist email")
+    if not payload.get("requested_datetime_iso"):
+        missing.append("appointment date and time")
+    if clarification:
+        return clarification
+    if len(missing) == 2:
+        return (
+            "Please share the therapist email and requested date/time in Europe/Stockholm "
+            "(for example: therapist@example.com, 2026-02-14 15:00)."
+        )
+    if "therapist email" in missing:
+        return "Please provide the therapist email address."
+    return "Please provide the requested appointment date/time in Europe/Stockholm."
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
 @app.get("/status")
 def status() -> dict[str, Any]:
+    llm_provider = settings.llm_provider
+    embed_provider = settings.embed_provider
     pg_ready = pgvector_ready()
-    ollama_reachable = False
-    try:
-        response = httpx.get(f"{settings.ollama_base_url}/api/tags", timeout=0.8)
-        ollama_reachable = response.status_code == 200
-    except httpx.HTTPError:
-        ollama_reachable = False
-    agent_mode = "llm_rag" if ollama_reachable and pg_ready else "deterministic"
+    openai_enabled = llm_provider == "openai" or embed_provider == "openai"
+    ollama_enabled = llm_provider == "ollama" or embed_provider == "ollama"
+    openai_ok = probe_openai_connectivity() if openai_enabled else False
+    ollama_ok = probe_ollama_connectivity() if ollama_enabled else False
+    mcp_ok = probe_mcp_health() if settings.mcp_base_url else False
+    llm_ok = openai_ok if llm_provider == "openai" else ollama_ok
+    agent_mode = "llm_rag" if llm_ok and pg_ready else "deterministic"
     if not pg_ready:
         reason = "pgvector not ready"
-    elif not ollama_reachable:
-        reason = "Ollama not reachable"
+    elif not llm_ok:
+        reason = f"{llm_provider} not reachable"
     else:
         reason = "LLM+RAG ready"
+    model: str | None = None
+    if llm_ok:
+        model = settings.openai_chat_model if llm_provider == "openai" else settings.ollama_model
     return {
         "agent_mode": agent_mode,
-        "ollama_reachable": ollama_reachable,
+        "llm_provider": llm_provider,
+        "embed_provider": embed_provider,
+        "embed_dim": get_cached_embedding_dim(),
+        "openai_ok": openai_ok,
+        "ollama_ok": ollama_ok,
+        "mcp_ok": mcp_ok,
+        "ollama_reachable": ollama_ok,
         "pgvector_ready": pg_ready,
-        "model": settings.ollama_model if ollama_reachable else None,
+        "model": model,
         "reason": reason
     }
 
@@ -336,19 +433,156 @@ def therapists_search(
         raise HTTPException(status_code=401, detail="not authenticated")
     if not user.is_premium:
         raise HTTPException(status_code=403, detail="premium required")
-    results = search_therapists(payload.location, payload.radius_km)
+    results = mcp_therapist_search(
+        location_text=payload.location,
+        radius_km=payload.radius_km,
+        specialty=None,
+        limit=5
+    )
     return TherapistSearchResponse(results=results)
 
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(payload: ChatRequest, request: Request, db: Session = Depends(get_db)) -> ChatResponse:
-    intent = classify_intent(payload.message)
+    message = payload.message.strip()
 
-    if intent in {"crisis", "prescription"}:
-        return route_message(payload.message)
+    # Safety checks must run before any external tool execution.
+    if is_crisis(message) or is_prescription_request(message):
+        return route_message(message)
+
+    user = _get_user_from_cookie(db, request)
+    pending_action = None
+    pending_expired = False
+    if user:
+        pending_action, pending_expired = load_pending_booking(db, str(user.id))
+
+    if pending_action:
+        pending_payload = parse_pending_payload(pending_action)
+        if is_negative(message):
+            clear_pending_booking(db, pending_action)
+            return ChatResponse(
+                coach_message="Okay, I cancelled the pending booking email request.",
+                requires_confirmation=False
+            )
+
+        if is_affirmative(message):
+            if not _pending_payload_complete(pending_payload):
+                return ChatResponse(
+                    coach_message=_missing_booking_fields_message(pending_payload)
+                )
+            email_payload = EmailSendPayload(
+                to=pending_payload["therapist_email"] or "",
+                subject=pending_payload["subject"] or "",
+                body=pending_payload["body"] or "",
+                reply_to=pending_payload.get("reply_to")
+            )
+            try:
+                send_email_for_user(str(user.id), email_payload)
+                success_message = "Email sent successfully. I have cleared the pending booking request."
+            except HTTPException as exc:
+                success_message = f"I could not send the email: {exc.detail}"
+            clear_pending_booking(db, pending_action)
+            return ChatResponse(
+                coach_message=success_message,
+                requires_confirmation=False
+            )
+
+        update = extract_booking_data(message)
+        changed = False
+        if not pending_payload.get("therapist_email") and update.therapist_email:
+            pending_payload["therapist_email"] = update.therapist_email
+            changed = True
+        if not pending_payload.get("requested_datetime_iso") and update.requested_datetime:
+            pending_payload["requested_datetime_iso"] = update.requested_datetime.isoformat()
+            changed = True
+
+        if _pending_payload_complete(pending_payload):
+            proposal = _booking_proposal_from_payload(pending_payload, pending_action.expires_at)
+            return ChatResponse(
+                coach_message=(
+                    f"Please confirm sending this request to {proposal.therapist_email} for "
+                    f"{proposal.requested_time}. Reply YES to send or NO to cancel."
+                ),
+                booking_proposal=proposal,
+                requires_confirmation=True
+            )
+
+        if changed and pending_payload.get("therapist_email") and pending_payload.get("requested_datetime_iso"):
+            dt = datetime.fromisoformat(pending_payload["requested_datetime_iso"] or "")
+            complete_payload = build_booking_email_content(
+                user=user,
+                therapist_email=pending_payload["therapist_email"] or "",
+                requested_datetime=dt
+            )
+            save_pending_booking(db, str(user.id), complete_payload)
+            refreshed_action, _ = load_pending_booking(db, str(user.id))
+            if not refreshed_action:
+                raise HTTPException(status_code=500, detail="failed to load pending booking")
+            proposal = _booking_proposal_from_payload(complete_payload, refreshed_action.expires_at)
+            return ChatResponse(
+                coach_message=(
+                    f"I prepared the email to {proposal.therapist_email} for {proposal.requested_time}. "
+                    "Reply YES to send or NO to cancel."
+                ),
+                booking_proposal=proposal,
+                requires_confirmation=True
+            )
+
+        if changed:
+            save_pending_booking(db, str(user.id), pending_payload)
+
+        return ChatResponse(
+            coach_message=_missing_booking_fields_message(pending_payload, clarification=update.clarification)
+        )
+
+    if pending_expired and (is_affirmative(message) or is_negative(message)):
+        return ChatResponse(
+            coach_message=(
+                f"Your pending booking request expired after {BOOKING_TTL_MINUTES} minutes. "
+                "Please start again with therapist email and time."
+            ),
+            requires_confirmation=False
+        )
+
+    if is_booking_intent(message):
+        if not user:
+            return ChatResponse(
+                coach_message="Please sign in before I can prepare and send booking emails."
+            )
+        extracted = extract_booking_data(message)
+        booking_payload: dict[str, str | None] = {
+            "therapist_email": extracted.therapist_email,
+            "requested_datetime_iso": extracted.requested_datetime.isoformat() if extracted.requested_datetime else None,
+            "subject": None,
+            "body": None,
+            "reply_to": user.email
+        }
+        if extracted.therapist_email and extracted.requested_datetime:
+            booking_payload = build_booking_email_content(
+                user=user,
+                therapist_email=extracted.therapist_email,
+                requested_datetime=extracted.requested_datetime
+            )
+            pending = save_pending_booking(db, str(user.id), booking_payload)
+            proposal = _booking_proposal_from_payload(booking_payload, pending.expires_at)
+            return ChatResponse(
+                coach_message=(
+                    f"I prepared an appointment email to {proposal.therapist_email} for "
+                    f"{proposal.requested_time}. Reply YES to send or NO to cancel."
+                ),
+                booking_proposal=proposal,
+                requires_confirmation=True
+            )
+
+        save_pending_booking(db, str(user.id), booking_payload)
+        return ChatResponse(
+            coach_message=_missing_booking_fields_message(booking_payload, clarification=extracted.clarification),
+            requires_confirmation=False
+        )
+
+    intent = classify_intent(message)
 
     if intent == "therapist_search":
-        user = _get_user_from_cookie(db, request)
         if not user or not user.is_premium:
             return ChatResponse(
                 coach_message="Therapist search is available with premium access.",
@@ -357,8 +591,13 @@ def chat(payload: ChatRequest, request: Request, db: Session = Depends(get_db)) 
                     message="Unlock therapist search to see local providers."
                 )
             )
-        location = _extract_location(payload.message) or "your area"
-        results = search_therapists(location, None)
+        location = _extract_location(message) or "your area"
+        results = mcp_therapist_search(
+            location_text=location,
+            radius_km=None,
+            specialty=None,
+            limit=5
+        )
         if not results:
             return ChatResponse(
                 coach_message=f"No providers were found near {location}. Try a nearby city or postcode.",
@@ -369,7 +608,7 @@ def chat(payload: ChatRequest, request: Request, db: Session = Depends(get_db)) 
             therapists=results
         )
 
-    response_json = run_agent(payload.message)
+    response_json = run_agent(message)
     return ChatResponse(**response_json)
 
 

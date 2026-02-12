@@ -1,0 +1,7 @@
+.next
+node_modules
+coverage
+npm-debug.log*
+Dockerfile*
+*.md
+*.log

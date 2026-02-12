@@ -103,16 +103,18 @@ export default function Home() {
     }
   };
 
-  const handleSend = async () => {
-    const trimmed = input.trim();
-    if (!trimmed || isSending) return;
+  const sendMessage = async (rawMessage: string) => {
+    const trimmed = rawMessage.trim();
+    if (!trimmed || isSending) {
+      return;
+    }
+
     const userMsg: Message = {
       id: crypto.randomUUID(),
       role: "user",
       content: trimmed
     };
     setMessages((prev) => [...prev, userMsg]);
-    setInput("");
     setIsSending(true);
     setError(null);
     try {
@@ -130,6 +132,8 @@ export default function Home() {
         id: crypto.randomUUID(),
         role: "assistant",
         content: data.coach_message,
+        booking_proposal: data.booking_proposal,
+        requires_confirmation: data.requires_confirmation,
         exercise: data.exercise,
         resources: data.resources,
         therapists: data.therapists,
@@ -148,6 +152,19 @@ export default function Home() {
     } finally {
       setIsSending(false);
     }
+  };
+
+  const handleSend = async () => {
+    const trimmed = input.trim();
+    if (!trimmed) {
+      return;
+    }
+    setInput("");
+    await sendMessage(trimmed);
+  };
+
+  const handleBookingAction = async (action: "YES" | "NO") => {
+    await sendMessage(action);
   };
 
   const handleTherapistSearch = async () => {
@@ -257,7 +274,12 @@ export default function Home() {
           )}
           <div className="space-y-4">
             {messages.map((msg) => (
-              <ChatBubble key={msg.id} message={msg} />
+              <ChatBubble
+                key={msg.id}
+                message={msg}
+                onBookingAction={handleBookingAction}
+                bookingActionDisabled={isSending}
+              />
             ))}
             {isSending && <div className="flex justify-start text-sm text-ink/60">Thinking...</div>}
           </div>

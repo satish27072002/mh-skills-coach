@@ -5,98 +5,179 @@ from fastapi import HTTPException
 from jsonschema import ValidationError, validate
 
 from .config import settings
-from .schemas import Resource, TherapistResult
+from .schemas import TherapistResult
 
-BOOKING_RESULT_SCHEMA = {
+
+class MCPClientError(RuntimeError):
+    pass
+
+
+THERAPIST_SEARCH_SUCCESS_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "providers": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "url": {"type": "string"},
-                    "description": {"type": "string"}
-                },
-                "required": ["title", "url", "description"]
-            }
-        }
-    },
-    "required": ["providers"]
-}
-
-THERAPIST_SEARCH_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "therapists": {
+        "ok": {"const": True},
+        "results": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string"},
                     "address": {"type": "string"},
-                    "url": {"type": "string"},
-                    "phone": {"type": "string"},
-                    "distance_km": {"type": "number"}
+                    "distance_km": {"type": ["number", "null"]},
+                    "phone": {"type": ["string", "null"]},
+                    "email": {"type": ["string", "null"]},
+                    "source_url": {"type": ["string", "null"]}
                 },
-                "required": ["name", "address", "url", "phone", "distance_km"]
+                "required": ["name", "address", "distance_km", "phone", "email", "source_url"],
+                "additionalProperties": False
             }
         }
     },
-    "required": ["therapists"]
+    "required": ["ok", "results"],
+    "additionalProperties": False
 }
 
-def suggest_providers(params: dict[str, Any] | None = None) -> list[Resource]:
-    url = f"{settings.mcp_base_url}/tools/booking.suggest_providers"
-    try:
-        response = httpx.post(url, json={"params": params or {}}, timeout=5.0)
-        response.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail="mcp request failed") from exc
+TOOL_ERROR_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "ok": {"const": False},
+        "error": {
+            "type": "object",
+            "properties": {
+                "code": {"type": "string"},
+                "message": {"type": "string"},
+                "details": {"type": "object"}
+            },
+            "required": ["code", "message", "details"],
+            "additionalProperties": False
+        }
+    },
+    "required": ["ok", "error"],
+    "additionalProperties": False
+}
 
-    payload = response.json()
-    result = payload.get("result")
-    try:
-        validate(instance=result, schema=BOOKING_RESULT_SCHEMA)
-    except ValidationError as exc:
-        raise HTTPException(status_code=502, detail="invalid mcp response") from exc
+SEND_EMAIL_SUCCESS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "ok": {"const": True},
+        "message_id": {"type": ["string", "null"]}
+    },
+    "required": ["ok", "message_id"],
+    "additionalProperties": False
+}
 
-    return [
-        Resource(
-            title=provider["title"],
-            url=provider["url"],
-            description=provider["description"]
+
+def probe_mcp_health() -> bool:
+    if not settings.mcp_base_url:
+        return False
+    try:
+        response = httpx.get(f"{settings.mcp_base_url}/health", timeout=0.8)
+        return response.status_code == 200
+    except httpx.HTTPError:
+        return False
+
+
+def mcp_therapist_search(
+    location_text: str,
+    radius_km: int | None = None,
+    specialty: str | None = None,
+    limit: int = 5
+) -> list[TherapistResult]:
+    payload: dict[str, Any] = {
+        "location_text": location_text,
+        "radius_km": radius_km if radius_km is not None else 5,
+        "limit": limit
+    }
+    if specialty:
+        payload["specialty"] = specialty
+
+    try:
+        response = httpx.post(
+            f"{settings.mcp_base_url}/tools/therapist_search",
+            json=payload,
+            timeout=8.0
         )
-        for provider in result["providers"]
-    ]
-
-
-def search_therapists(location: str, radius_km: int | None = None) -> list[TherapistResult]:
-    url = f"{settings.mcp_base_url}/tools/booking.search_therapists"
-    params = {"location": location}
-    if radius_km is not None:
-        params["radius_km"] = radius_km
-    try:
-        response = httpx.post(url, json={"params": params}, timeout=5.0)
-        response.raise_for_status()
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=502, detail="mcp therapist_search request timed out") from exc
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail="mcp request failed") from exc
+        raise HTTPException(status_code=502, detail="mcp therapist_search request failed") from exc
 
-    payload = response.json()
-    result = payload.get("result")
     try:
-        validate(instance=result, schema=THERAPIST_SEARCH_SCHEMA)
-    except ValidationError as exc:
-        raise HTTPException(status_code=502, detail="invalid mcp response") from exc
+        body = response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="invalid mcp response body") from exc
 
-    return [
-        TherapistResult(
-            name=therapist["name"],
-            address=therapist["address"],
-            url=therapist["url"],
-            phone=therapist["phone"],
-            distance_km=therapist["distance_km"]
+    if response.status_code >= 400:
+        try:
+            validate(instance=body, schema=TOOL_ERROR_SCHEMA)
+            code = body["error"]["code"]
+            message = body["error"]["message"]
+            raise HTTPException(
+                status_code=502,
+                detail=f"mcp therapist_search error ({code}): {message}"
+            )
+        except ValidationError:
+            raise HTTPException(status_code=502, detail="mcp therapist_search returned invalid error payload")
+
+    try:
+        validate(instance=body, schema=THERAPIST_SEARCH_SUCCESS_SCHEMA)
+    except ValidationError as exc:
+        raise HTTPException(status_code=502, detail="invalid mcp therapist_search payload") from exc
+
+    normalized: list[TherapistResult] = []
+    for result in body["results"]:
+        normalized.append(
+            TherapistResult(
+                name=result["name"],
+                address=result["address"],
+                url=result["source_url"] or "https://www.openstreetmap.org",
+                phone=result["phone"] or "Phone unavailable",
+                distance_km=float(result["distance_km"]) if result["distance_km"] is not None else 0.0
+            )
         )
-        for therapist in result["therapists"]
-    ]
+    return normalized
+
+
+def mcp_send_email(
+    to: str,
+    subject: str,
+    body: str,
+    reply_to: str | None = None
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "to": to,
+        "subject": subject,
+        "body": body
+    }
+    if reply_to:
+        payload["reply_to"] = reply_to
+
+    try:
+        response = httpx.post(
+            f"{settings.mcp_base_url}/tools/send_email",
+            json=payload,
+            timeout=8.0
+        )
+    except httpx.TimeoutException as exc:
+        raise MCPClientError("mcp send_email request timed out") from exc
+    except httpx.HTTPError as exc:
+        raise MCPClientError("mcp send_email request failed") from exc
+
+    try:
+        body_json = response.json()
+    except ValueError as exc:
+        raise MCPClientError("invalid mcp send_email response body") from exc
+
+    if response.status_code >= 400:
+        try:
+            validate(instance=body_json, schema=TOOL_ERROR_SCHEMA)
+        except ValidationError as exc:
+            raise MCPClientError("mcp send_email returned invalid error payload") from exc
+        error = body_json["error"]
+        raise MCPClientError(f"mcp send_email error ({error['code']}): {error['message']}")
+
+    try:
+        validate(instance=body_json, schema=SEND_EMAIL_SUCCESS_SCHEMA)
+    except ValidationError as exc:
+        raise MCPClientError("invalid mcp send_email payload") from exc
+    return body_json

@@ -1,3 +1,4 @@
+from typing import Literal
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,10 +15,15 @@ class Settings(BaseSettings):
     therapist_search_radius_km_default: int = 10
     therapist_search_limit: int = 10
     demo_mode: bool = False
+    llm_provider: Literal["ollama", "openai"] = "ollama"
+    embed_provider: Literal["ollama", "openai"] = "ollama"
     ollama_base_url: str = "http://ollama:11434"
     ollama_model: str = "gemma2:2b"
     ollama_embed_model: str = "nomic-embed-text"
-    embedding_dim: int = 768
+    openai_api_key: str | None = None
+    openai_chat_model: str = "gpt-4o-mini"
+    openai_embed_model: str = "text-embedding-3-small"
+    embedding_dim: int | None = None
     stripe_secret_key: str | None = None
     stripe_webhook_secret: str | None = None
     stripe_price_id: str | None = None

@@ -20,13 +20,22 @@ def test_retrieve_similar_chunks_uses_embeddings(monkeypatch):
         return [0.1, 0.2, 0.3]
 
     class FakeResult:
+        def __init__(self, rows):
+            self._rows = rows
+
         def fetchall(self):
-            return [("chunk text", {"meta": "x"})]
+            return self._rows
+
+        def fetchone(self):
+            return self._rows[0] if self._rows else None
 
     class FakeConn:
-        def execute(self, _query, params):
+        def execute(self, _query, params=None):
+            sql = str(_query)
+            if "a.atttypmod" in sql:
+                return FakeResult([(7,)])  # vector(3) => typmod 7
             calls["params"] = params
-            return FakeResult()
+            return FakeResult([("chunk text", {"meta": "x"})])
 
         def __enter__(self):
             return self
@@ -44,6 +53,7 @@ def test_retrieve_similar_chunks_uses_embeddings(monkeypatch):
             return FakeConn()
 
     monkeypatch.setattr(db, "engine", FakeEngine())
+    monkeypatch.setattr(db, "get_active_embedding_dim", lambda: 3)
     results = db.retrieve_similar_chunks("hello", top_k=1, embedding_fn=embed_stub)
 
     assert calls["embedding"] == 1
@@ -87,8 +97,46 @@ def test_ingest_calls_embeddings_and_inserts(tmp_path, monkeypatch):
 
     monkeypatch.setattr(db, "engine", FakeEngine())
     monkeypatch.setattr(db, "init_db", lambda: None)
+    monkeypatch.setattr(db, "ensure_embedding_dimension_compatible", lambda: None)
+    monkeypatch.setattr("app.ingest.get_active_embedding_dim", lambda: 3)
 
     inserted = ingest_paths(tmp_path, reset=True, embed_fn=embed_stub)
 
     assert inserted == calls["chunk_inserts"]
     assert calls["embed"] == calls["chunk_inserts"]
+
+
+def test_retrieve_similar_chunks_raises_on_dim_mismatch(monkeypatch):
+    class FakeConn:
+        def execute(self, query, params=None):
+            if "a.atttypmod" in str(query):
+                class Result:
+                    def fetchone(self_nonlocal):
+                        return (7,)  # vector(3)
+                return Result()
+            raise AssertionError("query retrieval should not execute when mismatched")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeEngine:
+        class Dialect:
+            name = "postgresql"
+
+        dialect = Dialect()
+
+        def connect(self):
+            return FakeConn()
+
+    monkeypatch.setattr(db, "engine", FakeEngine())
+    monkeypatch.setattr(db, "get_active_embedding_dim", lambda: 1536)
+
+    try:
+        db.retrieve_similar_chunks("hello", top_k=1, embedding_fn=lambda _msg: [0.1, 0.2, 0.3])
+    except RuntimeError as exc:
+        assert "Embedding dimension mismatch" in str(exc)
+    else:
+        raise AssertionError("Expected RuntimeError for mismatched dimensions")

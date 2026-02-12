@@ -1,18 +1,15 @@
-import pytest
-from fastapi.testclient import TestClient
 import httpx
 import pytest
-from app.therapist_search import clear_cache
+from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
-@pytest.fixture(autouse=True)
-def _reset_therapist_cache():
-    clear_cache()
-
-
-from app import db
+from app import db, mcp_client
+from app.config import settings
 from app.main import app
 from app.models import User
-from app.therapist_search import clear_cache, search_therapists
+
+
+ORIGINAL_DATABASE_URL = str(db.engine.url)
 
 
 class DummyResponse:
@@ -20,147 +17,118 @@ class DummyResponse:
         self._payload = payload
         self.status_code = status_code
 
-    def raise_for_status(self) -> None:
-        return None
-
     def json(self):
         return self._payload
 
 
-@pytest.fixture(autouse=True)
-def reset_therapist_cache():
-    clear_cache()
+@pytest.fixture()
+def test_db():
+    db.reset_engine("sqlite+pysqlite:///./test_therapist_mcp.db")
+    db.init_db()
+    with db.SessionLocal() as session:
+        session.query(User).delete()
+        session.commit()
     yield
-    clear_cache()
+    db.reset_engine(ORIGINAL_DATABASE_URL)
 
 
-def test_therapist_search_geocode_overpass_happy_path(monkeypatch):
-    def fake_get(url, params, headers, timeout):
-        return DummyResponse([{"lat": "59.3300", "lon": "18.0600"}])
+def _create_user(*, is_premium: bool) -> User:
+    with db.SessionLocal() as session:
+        user = User(email=f"user-{is_premium}@example.com", name="User", is_premium=is_premium)
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        return user
 
-    def fake_post(url, content, headers, timeout):
-        return DummyResponse(
+
+def test_mcp_therapist_search_success(monkeypatch):
+    monkeypatch.setattr(
+        mcp_client.httpx,
+        "post",
+        lambda *args, **kwargs: DummyResponse(
             {
-                "elements": [
+                "ok": True,
+                "results": [
                     {
-                        "type": "node",
-                        "id": 1,
-                        "lat": 59.331,
-                        "lon": 18.061,
-                        "tags": {
-                            "name": "Calm Clinic",
-                            "addr:street": "Main St",
-                            "addr:housenumber": "1",
-                            "addr:city": "Stockholm",
-                            "website": "https://www.mindler.se",
-                            "phone": "+46 8 123 000"
-                        }
-                    },
-                    {
-                        "type": "node",
-                        "id": 2,
-                        "lat": 59.350,
-                        "lon": 18.100,
-                        "tags": {"name": "Far Clinic"}
+                        "name": "Calm Clinic",
+                        "address": "1 Main St",
+                        "distance_km": 1.1,
+                        "phone": "+46 8 123 000",
+                        "email": None,
+                        "source_url": "https://example.com/clinic"
                     }
                 ]
             }
         )
+    )
 
-    monkeypatch.setattr("app.therapist_search.httpx.get", fake_get)
-    monkeypatch.setattr("app.therapist_search.httpx.post", fake_post)
+    results = mcp_client.mcp_therapist_search("Stockholm", radius_km=5, specialty=None, limit=5)
 
-    results = search_therapists("Stockholm", radius_km=5)
-
-    assert len(results) == 2
+    assert len(results) == 1
     assert results[0].name == "Calm Clinic"
-    assert results[0].address.startswith("Main St")
-    assert "example.com" not in results[0].url
-    assert results[0].url.startswith("https://")
-    assert results[0].distance_km <= results[1].distance_km
-    assert "your area" not in results[0].name.lower()
+    assert results[0].url == "https://example.com/clinic"
 
 
-def test_therapist_search_no_results(monkeypatch):
+def test_mcp_therapist_search_invalid_argument_schema(monkeypatch):
     monkeypatch.setattr(
-        "app.therapist_search.httpx.get",
-        lambda *args, **kwargs: DummyResponse([{"lat": "59.3300", "lon": "18.0600"}])
-    )
-    monkeypatch.setattr(
-        "app.therapist_search.httpx.post",
-        lambda *args, **kwargs: DummyResponse({"elements": []})
+        mcp_client.httpx,
+        "post",
+        lambda *args, **kwargs: DummyResponse(
+            {"ok": True, "results": [{"name": "only_name"}]},
+            status_code=200
+        )
     )
 
-    results = search_therapists("Nowhere", radius_km=5)
+    with pytest.raises(HTTPException) as exc:
+        mcp_client.mcp_therapist_search("Stockholm")
+    assert exc.value.status_code == 502
+    assert "invalid mcp therapist_search payload" in str(exc.value.detail)
 
-    assert results == []
+
+def test_mcp_therapist_search_invalid_argument_error_payload(monkeypatch):
+    monkeypatch.setattr(
+        mcp_client.httpx,
+        "post",
+        lambda *args, **kwargs: DummyResponse(
+            {
+                "ok": False,
+                "error": {
+                    "code": "INVALID_ARGUMENT",
+                    "message": "location_text is required",
+                    "details": {}
+                }
+            },
+            status_code=400
+        )
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        mcp_client.mcp_therapist_search("Stockholm")
+    assert exc.value.status_code == 502
+    assert "INVALID_ARGUMENT" in str(exc.value.detail)
 
 
-def test_therapist_search_timeout(monkeypatch):
-    from app.therapist_search import clear_cache
-    clear_cache()
+def test_therapists_route_mcp_timeout_returns_502(monkeypatch, test_db):
+    premium_user = _create_user(is_premium=True)
+    client = TestClient(app)
+    client.cookies.set(settings.session_cookie_name, str(premium_user.id))
 
-    def fake_get(*args, **kwargs):
+    def timeout_post(*args, **kwargs):
         raise httpx.ReadTimeout("timeout")
 
-    monkeypatch.setattr("app.therapist_search.httpx.get", fake_get)
+    monkeypatch.setattr(mcp_client.httpx, "post", timeout_post)
 
-    results = search_therapists("Stockholm", radius_km=5)
+    response = client.post("/therapists/search", json={"location": "Stockholm", "radius_km": 5})
 
-    assert results == []
-
-
-def test_premium_gating_therapist_search():
-    original_db_url = str(db.engine.url)
-    db.reset_engine("sqlite+pysqlite:///./test_therapist_gate.db")
-    db.init_db()
-    try:
-        with db.SessionLocal() as session:
-            session.query(User).delete()
-            user = User(email="free@example.com", name="Free User", is_premium=False)
-            session.add(user)
-            session.commit()
-            session.refresh(user)
-
-        client = TestClient(app)
-        client.cookies.set("mh_session", str(user.id))
-        response = client.post("/therapists/search", json={"location": "Stockholm"})
-
-        assert response.status_code == 403
-    finally:
-        db.reset_engine(original_db_url)
+    assert response.status_code == 502
+    assert "timed out" in response.json()["detail"].lower()
 
 
-def test_premium_search_returns_results(monkeypatch):
-    original_db_url = str(db.engine.url)
-    db.reset_engine("sqlite+pysqlite:///./test_therapist_gate_premium.db")
-    db.init_db()
-    try:
-        with db.SessionLocal() as session:
-            session.query(User).delete()
-            user = User(email="pro@example.com", name="Pro User", is_premium=True)
-            session.add(user)
-            session.commit()
-            session.refresh(user)
+def test_premium_gating_therapist_search(test_db):
+    free_user = _create_user(is_premium=False)
+    client = TestClient(app)
+    client.cookies.set(settings.session_cookie_name, str(free_user.id))
 
-        monkeypatch.setattr(
-            "app.main.search_therapists",
-            lambda *_args, **_kwargs: [
-                {
-                    "name": "Mindler",
-                    "address": "Stockholm",
-                    "url": "https://www.mindler.se",
-                    "phone": "",
-                    "distance_km": 1.0
-                }
-            ]
-        )
-        client = TestClient(app)
-        client.cookies.set("mh_session", str(user.id))
-        response = client.post("/therapists/search", json={"location": "Stockholm"})
+    response = client.post("/therapists/search", json={"location": "Stockholm"})
 
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["results"][0]["name"] == "Mindler"
-    finally:
-        db.reset_engine(original_db_url)
+    assert response.status_code == 403

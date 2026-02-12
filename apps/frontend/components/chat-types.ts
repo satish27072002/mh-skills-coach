@@ -1,5 +1,13 @@
 export type ChatResponse = {
   coach_message: string;
+  booking_proposal?: {
+    therapist_email: string;
+    requested_time: string;
+    subject: string;
+    body: string;
+    expires_at: string;
+  };
+  requires_confirmation?: boolean;
   exercise?: {
     type: string;
     steps: string[];
@@ -22,6 +30,8 @@ export type Message = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  booking_proposal?: ChatResponse["booking_proposal"];
+  requires_confirmation?: boolean;
   exercise?: ChatResponse["exercise"];
   resources?: ChatResponse["resources"];
   therapists?: ChatResponse["therapists"];

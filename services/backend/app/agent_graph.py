@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from typing import Any, Callable, TypedDict
 
-import httpx
 from fastapi import HTTPException
 from langgraph.graph import END, StateGraph
 
-from .config import settings
 from .db import pgvector_ready, retrieve_similar_chunks
+from .llm.provider import ProviderError, generate_chat
 from .safety import is_crisis
 from .schemas import ChatResponse, Resource
 
@@ -47,7 +46,11 @@ def retrieve_context(state: AgentState) -> AgentState:
     message = state.get("user_message", "")
     if not pgvector_ready():
         return {"retrieved_chunks": []}
-    return {"retrieved_chunks": retrieve_similar_chunks(message, top_k=4)}
+    try:
+        chunks = retrieve_similar_chunks(message, top_k=4)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"retrieved_chunks": chunks}
 
 
 def llm_response(state: AgentState) -> AgentState:
@@ -64,28 +67,15 @@ def llm_response(state: AgentState) -> AgentState:
     if context_text:
         user_prompt = f"Context:\n{context_text}\n\nUser:\n{message}"
 
-    payload = {
-        "model": settings.ollama_model,
-        "stream": False,
-        "keep_alive": "10m",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
-    }
-    response = httpx.post(
-        f"{settings.ollama_base_url}/api/chat",
-        json=payload,
-        timeout=180.0
-    )
-    response.raise_for_status()
-    data = response.json()
-    content = (
-        data.get("message", {}).get("content")
-        or data.get("response")
-    )
-    if not content:
-        raise HTTPException(status_code=502, detail="LLM response missing content")
+    try:
+        content = generate_chat(
+            messages=[{"role": "user", "content": user_prompt}],
+            system_prompt=system_prompt,
+            timeout=180.0,
+            keep_alive="10m"
+        )
+    except ProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     response_json = ChatResponse(
         coach_message=content
     ).model_dump()

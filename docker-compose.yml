@@ -1,4 +1,21 @@
 services:
+  proxy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - APP_DOMAIN=${APP_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile.oracle:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
   frontend:
     build:
       context: ./apps/frontend
@@ -11,17 +28,16 @@ services:
       - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     depends_on:
-      - backend
-  proxy:
-    image: caddy:2-alpine
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-    depends_on:
-      - frontend
-      - backend
+      backend:
+        condition: service_healthy
+
   backend:
     build:
       context: ./services/backend
@@ -33,32 +49,46 @@ services:
       - ./data/papers:/data/papers:ro
     environment:
       - DATABASE_URL=postgresql+psycopg://postgres:postgres@postgres:5432/mh
+      - MCP_BASE_URL=http://mcp:7000
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000/}
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
       - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
       - STRIPE_PRICE_ID=${STRIPE_PRICE_ID}
       - COOKIE_SECURE=${COOKIE_SECURE:-false}
       - COOKIE_SAMESITE=${COOKIE_SAMESITE:-lax}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     depends_on:
-      - postgres
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    profiles:
-      - tunnel
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TOKEN:-}
-    depends_on:
-      - backend
+      postgres:
+        condition: service_healthy
+      mcp:
+        condition: service_healthy
+
   mcp:
     build:
       context: ./services/mcp
+    env_file:
+      - .env
+    environment:
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - SMTP_USE_TLS=${SMTP_USE_TLS:-true}
     ports:
       - "7000:7000"
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
   postgres:
     image: pgvector/pgvector:pg16
     environment:
@@ -69,7 +99,14 @@ services:
       - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mh"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 10s
 
 volumes:
   pgdata:
-  ollama:
+  caddy_data:
+  caddy_config:

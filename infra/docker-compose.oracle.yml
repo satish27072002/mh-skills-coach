@@ -19,6 +19,7 @@ services:
       - ../.env
     environment:
       - DATABASE_URL=postgresql+psycopg://postgres:postgres@postgres:5432/mh
+      - MCP_BASE_URL=http://mcp:7000
       - FRONTEND_URL=https://${APP_DOMAIN}
       - GOOGLE_REDIRECT_URI=https://${APP_DOMAIN}/auth/google/callback
       - COOKIE_SECURE=true
@@ -28,10 +29,20 @@ services:
       - STRIPE_PRICE_ID=${STRIPE_PRICE_ID}
     depends_on:
       - postgres
+      - mcp
 
   mcp:
     build:
       context: ../services/mcp
+    env_file:
+      - ../.env
+    environment:
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - SMTP_USE_TLS=${SMTP_USE_TLS:-true}
 
   ollama:
     image: ollama/ollama:latest

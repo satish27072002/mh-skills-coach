@@ -2,8 +2,31 @@
 
 import type { Message } from "./chat-types";
 
-export default function ChatBubble({ message }: { message: Message }) {
+type BookingAction = "YES" | "NO";
+
+function formatExpiry(expiresAt: string): string {
+  const parsed = new Date(expiresAt);
+  if (Number.isNaN(parsed.getTime())) {
+    return expiresAt;
+  }
+  return parsed.toLocaleString();
+}
+
+export default function ChatBubble({
+  message,
+  onBookingAction,
+  bookingActionDisabled = false
+}: {
+  message: Message;
+  onBookingAction?: (action: BookingAction) => void;
+  bookingActionDisabled?: boolean;
+}) {
   const isUser = message.role === "user";
+  const showBookingCard = Boolean(
+    !isUser && message.requires_confirmation && message.booking_proposal
+  );
+  const bookingProposal = message.booking_proposal;
+
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
@@ -78,6 +101,47 @@ export default function ChatBubble({ message }: { message: Message }) {
           <div className="rounded-lg border border-coral/40 bg-coral/10 p-2 text-ink">
             <p className="text-xs font-semibold uppercase tracking-[0.15em]">Premium</p>
             <p>{message.premium_cta.message}</p>
+          </div>
+        )}
+
+        {showBookingCard && bookingProposal && (
+          <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-ink">
+            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-amber-900">
+              Booking proposal
+            </p>
+            <p>
+              <span className="font-semibold">Therapist email:</span> {bookingProposal.therapist_email}
+            </p>
+            <p>
+              <span className="font-semibold">Requested time:</span> {bookingProposal.requested_time}
+            </p>
+            <p>
+              <span className="font-semibold">Subject:</span> {bookingProposal.subject}
+            </p>
+            <p className="whitespace-pre-wrap">
+              <span className="font-semibold">Body:</span> {bookingProposal.body}
+            </p>
+            <p className="text-xs text-ink/70">
+              Expires at: {formatExpiry(bookingProposal.expires_at)}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="rounded-full bg-ink px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                onClick={() => onBookingAction?.("YES")}
+                disabled={bookingActionDisabled}
+              >
+                Send email
+              </button>
+              <button
+                type="button"
+                className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-ink disabled:opacity-50"
+                onClick={() => onBookingAction?.("NO")}
+                disabled={bookingActionDisabled}
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         )}
       </div>
