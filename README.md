@@ -122,6 +122,12 @@ docker compose up -d --build
 docker compose exec backend python -m app.ingest --path /data/papers --reset
 ```
 
+## Additional Docs
+- `SPEC.md`
+- `SAFETY.md`
+- `TODO.md`
+- `docs/DEPLOYMENT.md`
+
 ## Secrets & Environment
 - Copy `.env.example` to `.env` and configure values for your environment.
 - Never commit secrets (API keys, OAuth secrets, SMTP credentials, Stripe keys).
