@@ -11,10 +11,13 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+**/.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.dist//build/
 
 # Env
 .env
-.env.*
 !.env.example
 
 # Docker
@@ -24,8 +27,8 @@ venv/
 .DS_Store
 .vscode/
 
-.env
 data/papers/
 **/*.pdf
 services/backend/test*.db
+
 

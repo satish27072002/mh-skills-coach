@@ -86,3 +86,24 @@ def test_mcp_error_logs_failed_and_returns_502(monkeypatch, email_db):
         row = session.query(OutboundEmail).filter(OutboundEmail.user_id == "9").one()
         assert row.status == "failed"
         assert "smtp unavailable" in (row.error or "")
+
+
+def test_dev_mode_blocks_when_smtp_not_configured(monkeypatch, email_db):
+    monkeypatch.setattr("app.email_orchestrator.settings.dev_mode", True)
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    monkeypatch.delenv("SMTP_FROM", raising=False)
+    payload = EmailSendPayload(
+        to="user@example.com",
+        subject="Subject",
+        body="Body"
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        send_email_for_user("11", payload)
+
+    assert exc.value.status_code == 503
+    assert "SMTP not configured" in str(exc.value.detail)
+    with db.SessionLocal() as session:
+        row = session.query(OutboundEmail).filter(OutboundEmail.user_id == "11").one()
+        assert row.status == "blocked"
+        assert row.error == "smtp_not_configured"

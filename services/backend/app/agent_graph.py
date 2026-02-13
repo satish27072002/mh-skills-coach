@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from langgraph.graph import END, StateGraph
 
 from .db import pgvector_ready, retrieve_similar_chunks
-from .llm.provider import ProviderError, generate_chat
+from .llm.provider import ProviderError, ProviderNotConfiguredError, generate_chat
 from .safety import is_crisis
 from .schemas import ChatResponse, Resource
 
@@ -48,6 +48,8 @@ def retrieve_context(state: AgentState) -> AgentState:
         return {"retrieved_chunks": []}
     try:
         chunks = retrieve_similar_chunks(message, top_k=4)
+    except ProviderNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"retrieved_chunks": chunks}
@@ -72,8 +74,12 @@ def llm_response(state: AgentState) -> AgentState:
             messages=[{"role": "user", "content": user_prompt}],
             system_prompt=system_prompt,
             timeout=180.0,
-            keep_alive="10m"
+            keep_alive="10m",
+            retrieved_chunks_count=len(chunks),
+            user_message=message
         )
+    except ProviderNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     response_json = ChatResponse(

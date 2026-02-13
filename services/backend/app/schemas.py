@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class ChatRequest(BaseModel):
@@ -28,11 +28,16 @@ class TherapistResult(BaseModel):
     url: str
     phone: str
     distance_km: float
+    email: str | None = None
+    source_url: str | None = None
 
 
 class TherapistSearchRequest(BaseModel):
-    location: str
+    model_config = ConfigDict(populate_by_name=True)
+
+    location_text: str = Field(validation_alias=AliasChoices("location_text", "location"))
     radius_km: int | None = None
+    limit: int | None = None
 
 
 class TherapistSearchResponse(BaseModel):

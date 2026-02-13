@@ -58,10 +58,30 @@ class BookingExtraction:
 
 def is_booking_intent(message: str) -> bool:
     lower = message.lower()
-    has_email_verb = "email" in lower or "send" in lower
-    has_context = any(token in lower for token in ["appointment", "book", "booking", "therapist", "session"])
+    has_booking_action = any(
+        phrase in lower
+        for phrase in [
+            "email",
+            "send",
+            "appointment",
+            "book",
+            "booking",
+            "request an appointment",
+            "request appointment",
+        ]
+    )
+    if not has_booking_action:
+        return False
+
     has_email_address = EMAIL_RE.search(message) is not None
-    return (has_email_verb and has_context) or (has_email_address and "appointment" in lower)
+    has_datetime_hint = bool(
+        ISO_DATETIME_RE.search(message)
+        or DATE_TIME_RE.search(message)
+        or DATE_ONLY_RE.search(message)
+        or "tomorrow" in lower
+        or WEEKDAY_RE.search(lower)
+    )
+    return has_email_address or has_datetime_hint
 
 
 def is_affirmative(message: str) -> bool:

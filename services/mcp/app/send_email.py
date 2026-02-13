@@ -33,7 +33,7 @@ def is_valid_email(value: str) -> bool:
 
 def smtp_config_from_env() -> dict[str, object]:
     host = os.getenv("SMTP_HOST")
-    port_raw = os.getenv("SMTP_PORT")
+    port_raw = os.getenv("SMTP_PORT", "587")
     username = os.getenv("SMTP_USERNAME")
     password = os.getenv("SMTP_PASSWORD")
     smtp_from = os.getenv("SMTP_FROM")
@@ -41,10 +41,8 @@ def smtp_config_from_env() -> dict[str, object]:
 
     if not host:
         raise ValueError("SMTP_HOST is required.")
-    if not port_raw:
-        raise ValueError("SMTP_PORT is required.")
     try:
-        port = int(port_raw)
+        port = int(port_raw.strip())
     except ValueError as exc:
         raise ValueError("SMTP_PORT must be an integer.") from exc
     if not smtp_from:

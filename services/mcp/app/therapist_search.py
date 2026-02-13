@@ -217,6 +217,10 @@ def therapist_search(
     overpass_base_url: str,
     user_agent: str,
 ) -> list[dict[str, Any]]:
+    normalized_specialty = specialty.strip() if isinstance(specialty, str) else None
+    if normalized_specialty == "":
+        normalized_specialty = None
+
     coords = geocode_location(
         location_text=location_text,
         nominatim_base_url=nominatim_base_url,
@@ -236,6 +240,6 @@ def therapist_search(
         elements=elements,
         origin_lat=lat,
         origin_lon=lon,
-        specialty=specialty,
+        specialty=normalized_specialty,
         limit=limit
     )

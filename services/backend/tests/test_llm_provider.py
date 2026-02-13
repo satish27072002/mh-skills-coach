@@ -23,6 +23,7 @@ class DummyResponse:
 
 
 def test_validate_provider_configuration_requires_openai_key(monkeypatch):
+    monkeypatch.setattr(settings, "dev_mode", False)
     monkeypatch.setattr(settings, "llm_provider", "openai")
     monkeypatch.setattr(settings, "embed_provider", "ollama")
     monkeypatch.setattr(settings, "openai_api_key", None)
@@ -57,6 +58,7 @@ def test_generate_chat_ollama(monkeypatch):
 
 def test_generate_chat_openai(monkeypatch):
     monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "dev_mode", False)
     monkeypatch.setattr(settings, "openai_api_key", "sk-test")
     captured: dict[str, object] = {}
 
@@ -99,6 +101,7 @@ def test_embed_texts_ollama_retries(monkeypatch):
 
 def test_embed_texts_openai(monkeypatch):
     monkeypatch.setattr(settings, "embed_provider", "openai")
+    monkeypatch.setattr(settings, "dev_mode", False)
     monkeypatch.setattr(settings, "openai_api_key", "sk-test")
 
     def fake_post(url, json=None, headers=None, timeout=None, **kwargs):
@@ -125,3 +128,23 @@ def test_probe_openai_connectivity_short_circuits_without_key(monkeypatch):
 
     monkeypatch.setattr(llm_provider.httpx, "get", fail_get)
     assert llm_provider.probe_openai_connectivity() is False
+
+
+def test_generate_chat_mock_mentions_context(monkeypatch):
+    monkeypatch.setattr(settings, "llm_provider", "mock")
+    monkeypatch.setattr(settings, "embedding_dim", 8)
+    content = llm_provider.generate_chat(
+        messages=[{"role": "user", "content": "Hello mock"}],
+        retrieved_chunks_count=2
+    )
+    assert "Hello mock" in content
+    assert "Retrieved context used: 2 chunks." in content
+
+
+def test_embed_texts_mock_is_deterministic(monkeypatch):
+    monkeypatch.setattr(settings, "embed_provider", "mock")
+    monkeypatch.setattr(settings, "embedding_dim", 5)
+    first = llm_provider.embed_texts(["same input"])[0]
+    second = llm_provider.embed_texts(["same input"])[0]
+    assert len(first) == 5
+    assert first == second

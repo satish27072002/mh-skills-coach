@@ -15,8 +15,9 @@ class Settings(BaseSettings):
     therapist_search_radius_km_default: int = 10
     therapist_search_limit: int = 10
     demo_mode: bool = False
-    llm_provider: Literal["ollama", "openai"] = "ollama"
-    embed_provider: Literal["ollama", "openai"] = "ollama"
+    dev_mode: bool = False
+    llm_provider: Literal["ollama", "openai", "mock"] = "ollama"
+    embed_provider: Literal["ollama", "openai", "mock"] = "ollama"
     ollama_base_url: str = "http://ollama:11434"
     ollama_model: str = "gemma2:2b"
     ollama_embed_model: str = "nomic-embed-text"
@@ -33,7 +34,6 @@ class Settings(BaseSettings):
     session_cookie_name: str = "mh_session"
     cookie_secure: bool = False
     cookie_samesite: str = "lax"  # "lax" for localhost, "none" for tunnel/https
-
 
 
 settings = Settings()

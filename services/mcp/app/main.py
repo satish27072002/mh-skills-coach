@@ -21,7 +21,7 @@ THERAPIST_SEARCH_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "location_text": {"type": "string", "minLength": 1},
         "radius_km": {"type": "number", "minimum": 1, "maximum": 50},
-        "specialty": {"type": "string"},
+        "specialty": {"type": ["string", "null"]},
         "limit": {"type": "integer", "minimum": 1, "maximum": 20}
     },
     "required": ["location_text"],
@@ -121,6 +121,15 @@ def _extract_tool_payload(raw_body: Any, defaults: dict[str, Any] | None = None)
     return payload
 
 
+def _normalize_specialty(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -156,7 +165,7 @@ async def tool_therapist_search(request: Request):
         results = therapist_search(
             location_text=str(payload["location_text"]),
             radius_km=float(payload["radius_km"]),
-            specialty=str(payload["specialty"]) if payload.get("specialty") else None,
+            specialty=_normalize_specialty(payload.get("specialty")),
             limit=int(payload["limit"]),
             nominatim_base_url=os.getenv("NOMINATIM_BASE_URL", "https://nominatim.openstreetmap.org"),
             overpass_base_url=os.getenv("OVERPASS_BASE_URL", "https://overpass-api.de"),

@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 import secrets
 import urllib.parse
 from contextlib import asynccontextmanager
@@ -19,6 +20,8 @@ from google.oauth2 import id_token as google_id_token
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .agents import BookingEmailAgent, ChatRouter, RouterInput, SafetyGate, TherapistSearchAgent
+from .agents.therapist_agent import LAST_THERAPIST_LOCATION_BY_SESSION
 from .config import settings
 from .agent_graph import run_agent
 from .booking import (
@@ -100,15 +103,239 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 logger = logging.getLogger(__name__)
 UTC = ZoneInfo("UTC")
+_LAST_THERAPIST_LOCATION_BY_SESSION = LAST_THERAPIST_LOCATION_BY_SESSION
 
 
 def _extract_location(message: str) -> str | None:
-    message_lower = message.lower()
-    for token in ["near ", "in ", "around ", "at "]:
-        if token in message_lower:
-            start = message_lower.index(token) + len(token)
-            return message[start:].strip(" .?")
+    match = re.search(r"\b(?:near|in|around|at)\s+(.+)", message, flags=re.IGNORECASE)
+    if match:
+        tail = re.split(
+            r"\bwithin\s+\d+\s*(?:km|kilometers?|kilometres?)?\b|\bfor\b|[,.!?]",
+            match.group(1),
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+        location = tail.strip(" .?")
+        if location.lower() in {"me", "here", "my area"}:
+            return None
+        return location or None
     return None
+
+
+def _extract_radius_km(message: str) -> int | None:
+    match = re.search(
+        r"\bwithin\s+(\d{1,3})(?:\s*(?:km|kilometers?|kilometres?))?\b",
+        message,
+        flags=re.IGNORECASE
+    )
+    if not match:
+        match = re.search(
+            r"\b(\d{1,3})\s*(?:km|kilometers?|kilometres?)\b",
+            message,
+            flags=re.IGNORECASE
+        )
+    if not match:
+        return None
+    return min(max(int(match.group(1)), 1), 50)
+
+
+def _extract_specialty(message: str) -> str | None:
+    match = re.search(r"\bfor\s+(.+)", message, flags=re.IGNORECASE)
+    if not match:
+        return None
+    candidate = re.split(
+        r"\bwithin\s+\d+\s*(?:km|kilometers?|kilometres?)?\b|\b(?:near|in|around|at)\b|[,.!?]",
+        match.group(1),
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0].strip(" .?")
+    if not candidate or candidate.lower() in {"me", "here", "my area"}:
+        return None
+    return candidate
+
+
+def _normalize_specialty(specialty: str | None) -> str | None:
+    if specialty is None:
+        return None
+    normalized = specialty.strip()
+    return normalized or None
+
+
+def _session_location_key(user: User | None, request: Request) -> str | None:
+    if user:
+        return f"user:{user.id}"
+    session_cookie = request.cookies.get(settings.session_cookie_name)
+    if session_cookie:
+        return f"session:{session_cookie}"
+    return None
+
+
+def _remember_therapist_location(user: User | None, request: Request, location: str | None) -> None:
+    if not location:
+        return
+    normalized = location.strip()
+    if not normalized:
+        return
+    key = _session_location_key(user, request)
+    if not key:
+        return
+    _LAST_THERAPIST_LOCATION_BY_SESSION[key] = normalized
+
+
+def _get_remembered_therapist_location(user: User | None, request: Request) -> str | None:
+    key = _session_location_key(user, request)
+    if not key:
+        return None
+    return _LAST_THERAPIST_LOCATION_BY_SESSION.get(key)
+
+
+def _run_therapist_search(
+    location: str,
+    radius_km: int | None = None,
+    specialty: str | None = None,
+    limit: int = 10,
+) -> list:
+    return mcp_therapist_search(
+        location_text=location,
+        radius_km=radius_km,
+        specialty=_normalize_specialty(specialty),
+        limit=min(max(limit, 1), 10),
+    )
+
+
+def _therapist_search_with_retries(
+    *,
+    location: str,
+    radius_km: int | None,
+    specialty: str | None
+) -> tuple[list, str | None]:
+    requested_radius = min(max(radius_km, 1), 50) if radius_km is not None else None
+    normalized_specialty = _normalize_specialty(specialty)
+    attempts: list[tuple[int | None, str | None, str | None]] = [
+        (requested_radius, normalized_specialty, None),
+    ]
+    if normalized_specialty:
+        attempts.append((requested_radius, None, "specialty"))
+    if requested_radius is None or requested_radius < 25:
+        attempts.append((25, None, "radius"))
+
+    deduped_attempts: list[tuple[int | None, str | None, str | None]] = []
+    seen: set[tuple[int | None, str | None]] = set()
+    for radius, attempt_specialty, reason in attempts:
+        dedupe_key = (radius, attempt_specialty)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        deduped_attempts.append((radius, attempt_specialty, reason))
+
+    for radius, attempt_specialty, reason in deduped_attempts:
+        results = _run_therapist_search(
+            location=location,
+            radius_km=radius,
+            specialty=attempt_specialty
+        )
+        if results:
+            return results, reason
+
+    return [], None
+
+
+def _chat_therapist_search_response(user: User | None, request: Request, message: str) -> ChatResponse:
+    if not user:
+        return ChatResponse(
+            coach_message="Please sign in to use therapist search.",
+            premium_cta=PremiumCta(
+                enabled=True,
+                message="Sign in and upgrade to premium to unlock therapist search."
+            )
+        )
+    if not user.is_premium and not settings.dev_mode:
+        return ChatResponse(
+            coach_message="Therapist search is available with premium access.",
+            premium_cta=PremiumCta(
+                enabled=True,
+                message="Unlock therapist search to see local providers."
+            )
+        )
+    location = _extract_location(message) or "your area"
+    radius_km = _extract_radius_km(message)
+    specialty = _extract_specialty(message)
+    fallback_reason: str | None = None
+
+    try:
+        results, fallback_reason = _therapist_search_with_retries(
+            location=location,
+            radius_km=radius_km,
+            specialty=specialty
+        )
+    except HTTPException:
+        results = []
+
+    if not results:
+        return ChatResponse(
+            coach_message=f"No providers found near {location}. Try a nearby city or postcode.",
+            therapists=[]
+        )
+    _remember_therapist_location(user=user, request=request, location=location)
+    if fallback_reason:
+        if fallback_reason == "specialty":
+            coach_message = "No exact specialty match; showing nearby providers."
+        else:
+            coach_message = "No providers found in the requested radius; showing nearby providers."
+        return ChatResponse(
+            coach_message=coach_message,
+            therapists=results
+        )
+    return ChatResponse(
+        coach_message=f"Here are therapist options near {location}.",
+        therapists=results
+    )
+
+
+def _chat_crisis_response(user: User | None, request: Request, message: str) -> ChatResponse:
+    location = _extract_location(message) or _get_remembered_therapist_location(user, request) or "Stockholm"
+    requested_radius = _extract_radius_km(message) or 25
+    radius_km = min(max(requested_radius, 1), 50)
+    specialty = _extract_specialty(message)
+
+    therapists: list = []
+    try:
+        therapists, _ = _therapist_search_with_retries(
+            location=location,
+            radius_km=radius_km,
+            specialty=specialty
+        )
+    except HTTPException:
+        therapists = []
+
+    if therapists:
+        _remember_therapist_location(user=user, request=request, location=location)
+
+    return ChatResponse(
+        coach_message=(
+            "I am really glad you reached out. Please seek immediate support right now. "
+            "If you might act on these thoughts or are in immediate danger, call 112 immediately. "
+            "You can also contact Mind Självmordslinjen at 90101 (chat/phone) for urgent emotional support, "
+            "and use 1177 Vårdguiden for healthcare guidance and where to get care."
+        ),
+        resources=[
+            {
+                "title": "Emergency services (Sweden) - 112",
+                "url": "https://www.112.se/"
+            },
+            {
+                "title": "Mind Självmordslinjen - 90101",
+                "url": "https://mind.se/hitta-hjalp/sjalvmordslinjen/"
+            },
+            {
+                "title": "1177 Vårdguiden",
+                "url": "https://www.1177.se/"
+            }
+        ],
+        therapists=therapists,
+        risk_level="crisis",
+        premium_cta=None
+    )
 
 
 def _pending_payload_complete(payload: dict[str, str | None]) -> bool:
@@ -162,6 +389,14 @@ def _missing_booking_fields_message(payload: dict[str, str | None], clarificatio
     return "Please provide the requested appointment date/time in Europe/Stockholm."
 
 
+def _is_confirmation_only_message(message: str) -> bool:
+    tokens = re.sub(r"[^a-z]+", " ", message.lower()).strip().split()
+    if not tokens:
+        return False
+    allowed = {"yes", "confirm", "confirmed", "ok", "okay", "y"}
+    return all(token in allowed for token in tokens)
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -176,7 +411,10 @@ def status() -> dict[str, Any]:
     openai_ok = probe_openai_connectivity() if openai_enabled else False
     ollama_ok = probe_ollama_connectivity() if ollama_enabled else False
     mcp_ok = probe_mcp_health() if settings.mcp_base_url else False
-    llm_ok = openai_ok if llm_provider == "openai" else ollama_ok
+    if llm_provider == "mock":
+        llm_ok = True
+    else:
+        llm_ok = openai_ok if llm_provider == "openai" else ollama_ok
     agent_mode = "llm_rag" if llm_ok and pg_ready else "deterministic"
     if not pg_ready:
         reason = "pgvector not ready"
@@ -186,7 +424,18 @@ def status() -> dict[str, Any]:
         reason = "LLM+RAG ready"
     model: str | None = None
     if llm_ok:
-        model = settings.openai_chat_model if llm_provider == "openai" else settings.ollama_model
+        if llm_provider == "openai":
+            model = settings.openai_chat_model
+        elif llm_provider == "ollama":
+            model = settings.ollama_model
+        else:
+            model = "mock"
+    provider_warnings: list[str] = []
+    if settings.dev_mode and openai_enabled and not settings.openai_api_key:
+        if llm_provider == "openai":
+            provider_warnings.append("LLM provider openai missing OPENAI_API_KEY.")
+        if embed_provider == "openai":
+            provider_warnings.append("Embedding provider openai missing OPENAI_API_KEY.")
     return {
         "agent_mode": agent_mode,
         "llm_provider": llm_provider,
@@ -198,7 +447,8 @@ def status() -> dict[str, Any]:
         "ollama_reachable": ollama_ok,
         "pgvector_ready": pg_ready,
         "model": model,
-        "reason": reason
+        "reason": reason,
+        "provider_warnings": provider_warnings
     }
 
 
@@ -222,6 +472,22 @@ def _get_user_from_cookie(db: Session, request: Request) -> User | None:
     if not user_id:
         return None
     return db.get(User, int(user_id))
+
+
+def _build_router() -> ChatRouter:
+    return ChatRouter()
+
+
+def _build_therapist_agent() -> TherapistSearchAgent:
+    return TherapistSearchAgent(
+        search_fn=_run_therapist_search,
+        dev_mode=settings.dev_mode,
+        session_cookie_name=settings.session_cookie_name,
+    )
+
+
+def _build_booking_agent() -> BookingEmailAgent:
+    return BookingEmailAgent(send_email_fn=send_email_for_user)
 
 
 def _code_challenge(code_verifier: str) -> str:
@@ -429,184 +695,65 @@ def therapists_search(
     db: Session = Depends(get_db)
 ) -> TherapistSearchResponse:
     user = _get_user_from_cookie(db, request)
-    if not user:
+    therapist_agent = _build_therapist_agent()
+    if not user and not therapist_agent.dev_mode:
         raise HTTPException(status_code=401, detail="not authenticated")
-    if not user.is_premium:
+    if user and not user.is_premium and not therapist_agent.dev_mode:
         raise HTTPException(status_code=403, detail="premium required")
-    results = mcp_therapist_search(
-        location_text=payload.location,
+    results, _ = therapist_agent.search_with_retries(
+        location_text=payload.location_text,
         radius_km=payload.radius_km,
         specialty=None,
-        limit=5
+        limit=payload.limit,
     )
+    therapist_agent.remember_location(user=user, request=request, location=payload.location_text)
     return TherapistSearchResponse(results=results)
 
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(payload: ChatRequest, request: Request, db: Session = Depends(get_db)) -> ChatResponse:
     message = payload.message.strip()
-
-    # Safety checks must run before any external tool execution.
-    if is_crisis(message) or is_prescription_request(message):
-        return route_message(message)
-
     user = _get_user_from_cookie(db, request)
     pending_action = None
     pending_expired = False
     if user:
         pending_action, pending_expired = load_pending_booking(db, str(user.id))
 
-    if pending_action:
-        pending_payload = parse_pending_payload(pending_action)
-        if is_negative(message):
-            clear_pending_booking(db, pending_action)
-            return ChatResponse(
-                coach_message="Okay, I cancelled the pending booking email request.",
-                requires_confirmation=False
-            )
+    therapist_agent = _build_therapist_agent()
+    safety_gate = SafetyGate(therapist_agent=therapist_agent)
+    safety_response = safety_gate.handle(user=user, request=request, message=message)
+    if safety_response:
+        return safety_response
 
-        if is_affirmative(message):
-            if not _pending_payload_complete(pending_payload):
-                return ChatResponse(
-                    coach_message=_missing_booking_fields_message(pending_payload)
-                )
-            email_payload = EmailSendPayload(
-                to=pending_payload["therapist_email"] or "",
-                subject=pending_payload["subject"] or "",
-                body=pending_payload["body"] or "",
-                reply_to=pending_payload.get("reply_to")
-            )
-            try:
-                send_email_for_user(str(user.id), email_payload)
-                success_message = "Email sent successfully. I have cleared the pending booking request."
-            except HTTPException as exc:
-                success_message = f"I could not send the email: {exc.detail}"
-            clear_pending_booking(db, pending_action)
-            return ChatResponse(
-                coach_message=success_message,
-                requires_confirmation=False
-            )
+    if is_prescription_request(message):
+        return route_message(message)
 
-        update = extract_booking_data(message)
-        changed = False
-        if not pending_payload.get("therapist_email") and update.therapist_email:
-            pending_payload["therapist_email"] = update.therapist_email
-            changed = True
-        if not pending_payload.get("requested_datetime_iso") and update.requested_datetime:
-            pending_payload["requested_datetime_iso"] = update.requested_datetime.isoformat()
-            changed = True
-
-        if _pending_payload_complete(pending_payload):
-            proposal = _booking_proposal_from_payload(pending_payload, pending_action.expires_at)
-            return ChatResponse(
-                coach_message=(
-                    f"Please confirm sending this request to {proposal.therapist_email} for "
-                    f"{proposal.requested_time}. Reply YES to send or NO to cancel."
-                ),
-                booking_proposal=proposal,
-                requires_confirmation=True
-            )
-
-        if changed and pending_payload.get("therapist_email") and pending_payload.get("requested_datetime_iso"):
-            dt = datetime.fromisoformat(pending_payload["requested_datetime_iso"] or "")
-            complete_payload = build_booking_email_content(
+    router = _build_router()
+    route = router.route(
+        RouterInput(
+            message=message,
+            has_pending_booking=bool(pending_action),
+            has_pending_therapist_location=therapist_agent.has_pending_location_request(
                 user=user,
-                therapist_email=pending_payload["therapist_email"] or "",
-                requested_datetime=dt
-            )
-            save_pending_booking(db, str(user.id), complete_payload)
-            refreshed_action, _ = load_pending_booking(db, str(user.id))
-            if not refreshed_action:
-                raise HTTPException(status_code=500, detail="failed to load pending booking")
-            proposal = _booking_proposal_from_payload(complete_payload, refreshed_action.expires_at)
-            return ChatResponse(
-                coach_message=(
-                    f"I prepared the email to {proposal.therapist_email} for {proposal.requested_time}. "
-                    "Reply YES to send or NO to cancel."
-                ),
-                booking_proposal=proposal,
-                requires_confirmation=True
-            )
-
-        if changed:
-            save_pending_booking(db, str(user.id), pending_payload)
-
-        return ChatResponse(
-            coach_message=_missing_booking_fields_message(pending_payload, clarification=update.clarification)
-        )
-
-    if pending_expired and (is_affirmative(message) or is_negative(message)):
-        return ChatResponse(
-            coach_message=(
-                f"Your pending booking request expired after {BOOKING_TTL_MINUTES} minutes. "
-                "Please start again with therapist email and time."
+                request=request,
             ),
-            requires_confirmation=False
         )
+    )
 
-    if is_booking_intent(message):
-        if not user:
-            return ChatResponse(
-                coach_message="Please sign in before I can prepare and send booking emails."
-            )
-        extracted = extract_booking_data(message)
-        booking_payload: dict[str, str | None] = {
-            "therapist_email": extracted.therapist_email,
-            "requested_datetime_iso": extracted.requested_datetime.isoformat() if extracted.requested_datetime else None,
-            "subject": None,
-            "body": None,
-            "reply_to": user.email
-        }
-        if extracted.therapist_email and extracted.requested_datetime:
-            booking_payload = build_booking_email_content(
-                user=user,
-                therapist_email=extracted.therapist_email,
-                requested_datetime=extracted.requested_datetime
-            )
-            pending = save_pending_booking(db, str(user.id), booking_payload)
-            proposal = _booking_proposal_from_payload(booking_payload, pending.expires_at)
-            return ChatResponse(
-                coach_message=(
-                    f"I prepared an appointment email to {proposal.therapist_email} for "
-                    f"{proposal.requested_time}. Reply YES to send or NO to cancel."
-                ),
-                booking_proposal=proposal,
-                requires_confirmation=True
-            )
+    if route == "THERAPIST_SEARCH":
+        return therapist_agent.handle(user=user, request=request, message=message)
 
-        save_pending_booking(db, str(user.id), booking_payload)
-        return ChatResponse(
-            coach_message=_missing_booking_fields_message(booking_payload, clarification=extracted.clarification),
-            requires_confirmation=False
+    if route == "BOOKING_EMAIL":
+        booking_agent = _build_booking_agent()
+        booking_response = booking_agent.handle(
+            db=db,
+            user=user,
+            message=message,
+            pending_action=pending_action,
+            pending_expired=pending_expired,
         )
-
-    intent = classify_intent(message)
-
-    if intent == "therapist_search":
-        if not user or not user.is_premium:
-            return ChatResponse(
-                coach_message="Therapist search is available with premium access.",
-                premium_cta=PremiumCta(
-                    enabled=True,
-                    message="Unlock therapist search to see local providers."
-                )
-            )
-        location = _extract_location(message) or "your area"
-        results = mcp_therapist_search(
-            location_text=location,
-            radius_km=None,
-            specialty=None,
-            limit=5
-        )
-        if not results:
-            return ChatResponse(
-                coach_message=f"No providers were found near {location}. Try a nearby city or postcode.",
-                therapists=[]
-            )
-        return ChatResponse(
-            coach_message=f"Here are therapist options near {location}.",
-            therapists=results
-        )
+        if booking_response:
+            return booking_response
 
     response_json = run_agent(message)
     return ChatResponse(**response_json)

@@ -81,15 +81,20 @@ def mcp_therapist_search(
     location_text: str,
     radius_km: int | None = None,
     specialty: str | None = None,
-    limit: int = 5
+    limit: int = 10
 ) -> list[TherapistResult]:
+    normalized_specialty = specialty.strip() if isinstance(specialty, str) else None
+    if normalized_specialty == "":
+        normalized_specialty = None
+    normalized_radius = min(max(radius_km or 25, 1), 50)
+    normalized_limit = min(max(limit, 1), 10)
     payload: dict[str, Any] = {
         "location_text": location_text,
-        "radius_km": radius_km if radius_km is not None else 5,
-        "limit": limit
+        "radius_km": normalized_radius,
+        "limit": normalized_limit
     }
-    if specialty:
-        payload["specialty"] = specialty
+    if normalized_specialty:
+        payload["specialty"] = normalized_specialty
 
     try:
         response = httpx.post(
@@ -132,7 +137,9 @@ def mcp_therapist_search(
                 address=result["address"],
                 url=result["source_url"] or "https://www.openstreetmap.org",
                 phone=result["phone"] or "Phone unavailable",
-                distance_km=float(result["distance_km"]) if result["distance_km"] is not None else 0.0
+                distance_km=float(result["distance_km"]) if result["distance_km"] is not None else 0.0,
+                email=result["email"],
+                source_url=result["source_url"] or "https://www.openstreetmap.org",
             )
         )
     return normalized

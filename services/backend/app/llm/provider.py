@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Protocol
 
 import httpx
@@ -15,6 +16,10 @@ class ProviderError(RuntimeError):
 
 
 class ConfigurationError(RuntimeError):
+    pass
+
+
+class ProviderNotConfiguredError(RuntimeError):
     pass
 
 
@@ -206,7 +211,48 @@ class OpenAIProvider:
         return vectors
 
 
+class MockProvider:
+    def __init__(self, embedding_dim: int) -> None:
+        self.embedding_dim = embedding_dim
+
+    def generate_chat(
+        self,
+        messages: list[dict[str, str]],
+        system_prompt: str | None = None,
+        **kwargs: Any
+    ) -> str:
+        user_message = str(kwargs.get("user_message") or "")
+        if not user_message:
+            for message in reversed(messages):
+                if message.get("role") == "user":
+                    user_message = str(message.get("content") or "")
+                    break
+        retrieved_count = kwargs.get("retrieved_chunks_count")
+        context_note = ""
+        if isinstance(retrieved_count, int) and retrieved_count > 0:
+            context_note = f" Retrieved context used: {retrieved_count} chunks."
+        safe_echo = user_message.strip() or "your last message"
+        return f"Mock reply: I read \"{safe_echo}\".{context_note}"
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        return [self._stable_vector(text, self.embedding_dim) for text in texts]
+
+    @staticmethod
+    def _stable_vector(text: str, dim: int) -> list[float]:
+        vector: list[float] = []
+        for idx in range(dim):
+            digest = hashlib.sha256(f"{text}:{idx}".encode("utf-8")).digest()
+            value = int.from_bytes(digest[:4], "big", signed=False)
+            scaled = (value % 2000) / 1000.0 - 1.0
+            vector.append(float(f"{scaled:.6f}"))
+        return vector
+
+
 def validate_provider_configuration() -> None:
+    if settings.dev_mode:
+        return
     if settings.llm_provider == "openai" and not settings.openai_api_key:
         raise ConfigurationError("LLM_PROVIDER=openai requires OPENAI_API_KEY.")
     if settings.embed_provider == "openai" and not settings.openai_api_key:
@@ -214,7 +260,13 @@ def validate_provider_configuration() -> None:
 
 
 def get_llm_provider() -> LlmEmbeddingProvider:
+    if settings.llm_provider == "mock":
+        return MockProvider(settings.embedding_dim or 1536)
     if settings.llm_provider == "openai":
+        if not settings.openai_api_key and settings.dev_mode:
+            raise ProviderNotConfiguredError(
+                "LLM not configured. Set OPENAI_API_KEY or use LLM_PROVIDER=mock."
+            )
         return OpenAIProvider(
             api_key=settings.openai_api_key,
             chat_model=settings.openai_chat_model,
@@ -228,7 +280,13 @@ def get_llm_provider() -> LlmEmbeddingProvider:
 
 
 def get_embed_provider() -> LlmEmbeddingProvider:
+    if settings.embed_provider == "mock":
+        return MockProvider(settings.embedding_dim or 1536)
     if settings.embed_provider == "openai":
+        if not settings.openai_api_key and settings.dev_mode:
+            raise ProviderNotConfiguredError(
+                "Embedding not configured. Set OPENAI_API_KEY or use EMBED_PROVIDER=mock."
+            )
         return OpenAIProvider(
             api_key=settings.openai_api_key,
             chat_model=settings.openai_chat_model,

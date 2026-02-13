@@ -13,6 +13,10 @@ class Base(DeclarativeBase):
 
 
 def _make_engine(database_url: str):
+    if database_url.startswith("postgresql://"):
+        database_url = "postgresql+psycopg://" + database_url[len("postgresql://"):]
+    if database_url.startswith("postgres://"):
+        database_url = "postgresql+psycopg://" + database_url[len("postgres://"):]
     return create_engine(database_url, pool_pre_ping=True)
 
 
@@ -134,23 +138,24 @@ def get_chunks_embedding_dim() -> int | None:
     typmod = int(row[0])
     if typmod < 0:
         return None
-    return typmod - 4
+    return typmod
 
 
 def ensure_embedding_dimension_compatible() -> int | None:
     if engine.dialect.name != "postgresql":
         return None
     active_dim = get_active_embedding_dim()
-    schema_dim = get_chunks_embedding_dim()
-    if schema_dim is None:
+    schema_typmod = get_chunks_embedding_dim()
+    if schema_typmod is None:
         return None
-    if schema_dim != active_dim:
+    if schema_typmod not in {active_dim, active_dim + 4}:
+        schema_dim = schema_typmod - 4 if schema_typmod > 4 else schema_typmod
         raise RuntimeError(
             "Embedding dimension mismatch: chunks.embedding is "
             f"vector({schema_dim}) but active embed dimension is {active_dim}. "
             "Apply the vector dimension migration and run reindex."
         )
-    return schema_dim
+    return active_dim
 
 
 def retrieve_similar_chunks(

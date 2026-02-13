@@ -30,7 +30,7 @@ BEGIN
         RAISE EXCEPTION 'chunks.embedding column not found';
     END IF;
 
-    IF current_typmod <> target_dim + 4 THEN
+    IF current_typmod <> target_dim AND current_typmod <> target_dim + 4 THEN
         EXECUTE 'DROP INDEX IF EXISTS chunks_embedding_ivfflat_idx';
         EXECUTE format(
             'ALTER TABLE chunks ALTER COLUMN embedding TYPE vector(%s) USING NULL',

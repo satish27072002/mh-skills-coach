@@ -14,6 +14,7 @@ def test_status_endpoint_returns_mode_and_pgvector_flag(monkeypatch):
     monkeypatch.setattr(settings, "llm_provider", "ollama")
     monkeypatch.setattr(settings, "embed_provider", "ollama")
     monkeypatch.setattr(settings, "embedding_dim", 768)
+    monkeypatch.setattr(settings, "dev_mode", False)
     monkeypatch.setattr(settings, "mcp_base_url", "http://mcp:7000")
     monkeypatch.setattr(main, "pgvector_ready", lambda: False)
     monkeypatch.setattr(main, "probe_ollama_connectivity", lambda *args, **kwargs: False)
@@ -35,12 +36,14 @@ def test_status_endpoint_returns_mode_and_pgvector_flag(monkeypatch):
     assert payload["pgvector_ready"] is False
     assert payload["model"] is None
     assert "reason" in payload
+    assert payload["provider_warnings"] == []
 
 
 def test_status_switches_when_ollama_and_pgvector_ready(monkeypatch):
     monkeypatch.setattr(settings, "llm_provider", "ollama")
     monkeypatch.setattr(settings, "embed_provider", "ollama")
     monkeypatch.setattr(settings, "embedding_dim", 768)
+    monkeypatch.setattr(settings, "dev_mode", False)
     monkeypatch.setattr(settings, "mcp_base_url", "http://mcp:7000")
     monkeypatch.setattr(main, "pgvector_ready", lambda: True)
     monkeypatch.setattr(main, "probe_ollama_connectivity", lambda *args, **kwargs: True)
@@ -59,12 +62,14 @@ def test_status_switches_when_ollama_and_pgvector_ready(monkeypatch):
     assert payload["pgvector_ready"] is True
     assert payload["agent_mode"] == "llm_rag"
     assert payload["model"] is not None
+    assert payload["provider_warnings"] == []
 
 
 def test_status_switches_when_openai_and_pgvector_ready(monkeypatch):
     monkeypatch.setattr(settings, "llm_provider", "openai")
     monkeypatch.setattr(settings, "embed_provider", "openai")
     monkeypatch.setattr(settings, "embedding_dim", 1536)
+    monkeypatch.setattr(settings, "dev_mode", False)
     monkeypatch.setattr(settings, "openai_api_key", "test-key")
     monkeypatch.setattr(settings, "mcp_base_url", "http://mcp:7000")
     monkeypatch.setattr(main, "pgvector_ready", lambda: True)
@@ -85,18 +90,38 @@ def test_status_switches_when_openai_and_pgvector_ready(monkeypatch):
     assert payload["pgvector_ready"] is True
     assert payload["agent_mode"] == "llm_rag"
     assert payload["model"] == settings.openai_chat_model
+    assert payload["provider_warnings"] == []
 
 
 def test_startup_fails_fast_for_openai_without_api_key(monkeypatch, caplog):
     monkeypatch.setattr(settings, "llm_provider", "openai")
     monkeypatch.setattr(settings, "embed_provider", "ollama")
     monkeypatch.setattr(settings, "openai_api_key", None)
+    monkeypatch.setattr(settings, "dev_mode", False)
 
     with caplog.at_level(logging.CRITICAL):
         with pytest.raises(ConfigurationError):
             with TestClient(main.app):
                 pass
     assert any("Invalid provider configuration" in record.message for record in caplog.records)
+
+
+def test_startup_allows_openai_missing_key_in_dev_mode(monkeypatch):
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "embed_provider", "openai")
+    monkeypatch.setattr(settings, "openai_api_key", None)
+    monkeypatch.setattr(settings, "embedding_dim", 1536)
+    monkeypatch.setattr(settings, "dev_mode", True)
+    monkeypatch.setattr(main, "init_db", lambda: None)
+    monkeypatch.setattr(main, "ensure_embedding_dimension_compatible", lambda: None)
+
+    with TestClient(main.app) as client:
+        response = client.get("/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["openai_ok"] is False
+    assert payload["provider_warnings"]
 
 
 def test_startup_fails_fast_on_embedding_dimension_mismatch(monkeypatch):

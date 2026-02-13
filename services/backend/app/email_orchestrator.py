@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import os
 from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
 
 from . import db
+from .config import settings
 from .mcp_client import MCPClientError, mcp_send_email
 from .models import OutboundEmail
 
@@ -58,6 +60,14 @@ def _attempt_count_last_24h(user_id: str) -> int:
     return int(count)
 
 
+def _smtp_configured() -> bool:
+    if not (os.getenv("SMTP_HOST") or "").strip():
+        return False
+    if not (os.getenv("SMTP_FROM") or "").strip():
+        return False
+    return True
+
+
 def send_email_for_user(user_id: str, payload: EmailSendPayload) -> dict[str, Any]:
     user_key = str(user_id)
     attempts = _attempt_count_last_24h(user_key)
@@ -72,6 +82,19 @@ def send_email_for_user(user_id: str, payload: EmailSendPayload) -> dict[str, An
         raise HTTPException(
             status_code=429,
             detail="Email rate limit exceeded (max 3 attempts per 24 hours)."
+        )
+
+    if settings.dev_mode and not _smtp_configured():
+        _log_attempt(
+            user_id=user_key,
+            to_email=payload.to,
+            subject=payload.subject,
+            status="blocked",
+            error="smtp_not_configured"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="SMTP not configured. Configure SMTP_* env vars or disable email sending."
         )
 
     try:

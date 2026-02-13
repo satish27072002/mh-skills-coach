@@ -69,6 +69,38 @@ def test_mcp_therapist_search_success(monkeypatch):
     assert results[0].url == "https://example.com/clinic"
 
 
+def test_mcp_therapist_search_omits_empty_specialty(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def capture_post(*args, **kwargs):
+        captured["json"] = kwargs.get("json")
+        return DummyResponse({"ok": True, "results": []})
+
+    monkeypatch.setattr(mcp_client.httpx, "post", capture_post)
+
+    mcp_client.mcp_therapist_search("Stockholm", radius_km=5, specialty="", limit=5)
+
+    payload = captured["json"]
+    assert isinstance(payload, dict)
+    assert "specialty" not in payload
+
+
+def test_mcp_therapist_search_omits_none_specialty(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def capture_post(*args, **kwargs):
+        captured["json"] = kwargs.get("json")
+        return DummyResponse({"ok": True, "results": []})
+
+    monkeypatch.setattr(mcp_client.httpx, "post", capture_post)
+
+    mcp_client.mcp_therapist_search("Stockholm", radius_km=5, specialty=None, limit=5)
+
+    payload = captured["json"]
+    assert isinstance(payload, dict)
+    assert "specialty" not in payload
+
+
 def test_mcp_therapist_search_invalid_argument_schema(monkeypatch):
     monkeypatch.setattr(
         mcp_client.httpx,
@@ -132,3 +164,19 @@ def test_premium_gating_therapist_search(test_db):
     response = client.post("/therapists/search", json={"location": "Stockholm"})
 
     assert response.status_code == 403
+
+
+def test_therapists_route_accepts_location_text_alias(monkeypatch, test_db):
+    premium_user = _create_user(is_premium=True)
+    client = TestClient(app)
+    client.cookies.set(settings.session_cookie_name, str(premium_user.id))
+
+    monkeypatch.setattr(
+        "app.main._run_therapist_search",
+        lambda *args, **kwargs: []
+    )
+
+    response = client.post("/therapists/search", json={"location_text": "Stockholm", "radius_km": 10})
+
+    assert response.status_code == 200
+    assert response.json() == {"results": []}

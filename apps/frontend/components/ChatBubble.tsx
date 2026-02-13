@@ -26,14 +26,20 @@ export default function ChatBubble({
     !isUser && message.requires_confirmation && message.booking_proposal
   );
   const bookingProposal = message.booking_proposal;
+  const isCrisis = !isUser && message.risk_level === "crisis";
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
         className={`max-w-[80%] space-y-3 rounded-2xl px-4 py-3 text-sm shadow ${
           isUser ? "bg-ink text-white" : "bg-slate-100 text-ink"
-        }`}
+        } ${isCrisis ? "border-2 border-red-500 bg-red-50" : ""}`}
       >
+        {isCrisis && (
+          <p className="text-xs font-semibold uppercase tracking-[0.15em] text-red-700">
+            Crisis support
+          </p>
+        )}
         <p className="whitespace-pre-wrap">{message.content}</p>
 
         {message.exercise && (

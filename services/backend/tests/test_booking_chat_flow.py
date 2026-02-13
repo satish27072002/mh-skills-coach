@@ -204,3 +204,61 @@ def test_crisis_prevents_pending_creation_and_send(monkeypatch, booking_db):
     assert payload.get("risk_level") == "crisis"
     assert called["send"] == 0
     assert _pending_count(str(user.id)) == 0
+
+
+def test_yes_without_pending_returns_guidance(booking_db):
+    user = _create_user()
+    client = TestClient(app)
+    client.cookies.set(settings.session_cookie_name, str(user.id))
+
+    response = client.post("/chat", json={"message": "YES"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["coach_message"] == (
+        "No pending booking request to confirm. Please provide therapist email + time."
+    )
+    assert payload.get("requires_confirmation") is False
+
+
+def test_multiple_sequential_booking_emails_require_separate_confirmations(monkeypatch, booking_db):
+    user = _create_user()
+    sent_to: list[str] = []
+
+    def send_stub(user_id: str, payload):
+        sent_to.append(payload.to)
+        return {"ok": True, "message_id": "<msg>"}
+
+    monkeypatch.setattr("app.main.send_email_for_user", send_stub)
+    client = TestClient(app)
+    client.cookies.set(settings.session_cookie_name, str(user.id))
+
+    first = client.post(
+        "/chat",
+        json={"message": "Email therapist at first@example.com for an appointment on 2026-02-14 15:00"}
+    )
+    assert first.status_code == 200
+    first_payload = first.json()
+    assert first_payload["requires_confirmation"] is True
+    assert first_payload["booking_proposal"]["therapist_email"] == "first@example.com"
+
+    confirm_first = client.post("/chat", json={"message": "YES"})
+    assert confirm_first.status_code == 200
+    assert "sent" in confirm_first.json()["coach_message"].lower()
+    assert _pending_count(str(user.id)) == 0
+
+    second = client.post(
+        "/chat",
+        json={"message": "Email therapist at second@example.com for an appointment on 2026-02-15 16:30"}
+    )
+    assert second.status_code == 200
+    second_payload = second.json()
+    assert second_payload["requires_confirmation"] is True
+    assert second_payload["booking_proposal"]["therapist_email"] == "second@example.com"
+    assert _pending_count(str(user.id)) == 1
+
+    confirm_second = client.post("/chat", json={"message": "YES"})
+    assert confirm_second.status_code == 200
+    assert "sent" in confirm_second.json()["coach_message"].lower()
+    assert _pending_count(str(user.id)) == 0
+    assert sent_to == ["first@example.com", "second@example.com"]
