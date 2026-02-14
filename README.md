@@ -87,6 +87,40 @@ The app acts as a **bridge between self-help and professional care**, meeting us
 
 ---
 
+## 💼 Project Status & Development Note
+
+**This application represents a functional prototype developed under time and resource constraints.**
+
+While the system successfully demonstrates:
+- Multi-agent AI architecture with specialized routing
+- RAG-enabled conversational AI
+- Real-world integrations (Stripe, OAuth, SMTP, MCP)
+- Safety-first design principles
+
+**It is not a production-ready application** and intentionally scopes for rapid prototyping over comprehensive implementation.
+
+### Areas for Enhancement
+
+With additional development time and resources, this application would benefit from:
+
+- **Comprehensive safety testing** (output filtering, conversation-level risk tracking, edge case coverage)
+- **Production infrastructure** (horizontal scaling, caching, monitoring, CI/CD pipelines)
+- **Enhanced UX/UI** (mobile optimization, accessibility standards, refined user flows)
+- **Advanced features** (conversation history persistence, provider ranking algorithms, multi-language support)
+- **Security & compliance** (security audits, HIPAA compliance, penetration testing)
+
+### Technical Debt Acknowledgment
+
+Several implementation shortcuts were taken to prioritize demonstration of core concepts:
+- In-memory session state (should use Redis/database for persistence)
+- Basic keyword-based safety detection (needs LLM-powered backup)
+- Simplified datetime parsing (needs natural language processing enhancement)
+- Manual deployment process (needs automated CI/CD)
+
+**Given appropriate resources and development timeline, this architecture can scale into a robust, enterprise-grade mental health support platform.** The current implementation serves as a proof-of-concept showcasing technical capabilities and system design thinking.
+
+---
+
 ## 🏗 Architecture Overview
 
 ```
