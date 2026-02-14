@@ -1,187 +1,560 @@
 # MH Skills Coach
 
-MH Skills Coach is a safety-first mental-health support product that helps users:
-- practice practical coping skills in chat,
-- discover nearby therapists/clinics,
-- prepare and confirm booking emails to providers.
+**Live Application:** [https://mh-skills-coach.francecentral.cloudapp.azure.com/](https://mh-skills-coach.francecentral.cloudapp.azure.com/)
 
-It is designed as a coaching and navigation tool, not a replacement for licensed clinical care.
+A safety-first mental health support application that provides evidence-based coping skills coaching and streamlines the path to professional care. **This is not clinical care, therapy, or a medical service** — it's a navigation and skills-training tool.
 
-## Problem This Product Solves
-People often need support in two phases:
-- Immediate emotional support and actionable self-regulation skills.
-- A fast path to finding professional care and contacting providers.
+---
 
-MH Skills Coach combines both in one workflow: guided coaching + therapist discovery + booking email assistance.
+## 🎯 Problem Statement
 
-## Key Features
-- RAG-enabled coaching responses for grounded, contextual skill guidance.
-- Multi-agent chat orchestration:
-  - `TherapistSearchAgent` for provider lookup.
-  - `EmailBookingAgent` (implemented in code as `BookingEmailAgent`) for booking email proposals and confirmation flow.
-- MCP tool integration:
-  - `therapist_search` for provider discovery.
-  - `send_email` for booking email delivery.
-- Safety guardrails with crisis detection and escalation guidance.
-- Premium gating for therapist search and premium features in non-dev mode.
-- Payment flow with Stripe test-mode checkout and webhook handling.
+People experiencing mental health challenges often face a **two-phase need**:
 
-## Tech Stack
-- Frontend: Next.js (App Router)
-- Backend: FastAPI
-- Tool Service: MCP (HTTP tools)
-- Data: Postgres + pgvector
-- Reverse Proxy: Caddy
-- Local Orchestration: Docker Compose
+1. **Immediate support**: Actionable coping skills for emotional regulation in the moment
+2. **Access to care**: A fast, low-friction path to finding and contacting licensed providers
 
-## High-Level Architecture
-- `frontend` sends user interactions to backend APIs.
-- `backend` routes chat intent and coordinates safety, agents, and business logic.
-- `backend` calls `mcp` tools for therapist search and email sending.
-- `backend` reads/writes app state in `postgres` (including vector-backed retrieval paths).
-- `proxy` (Caddy) fronts frontend/backend for unified ingress.
+Traditional solutions address these separately, creating gaps in the support journey. Users often struggle to navigate from "I need help now" to "I'm connected with a professional."
 
-## Multi-Agent Design
-Backend chat routing is explicit and agent-based:
-- `SafetyGate` runs first and can short-circuit normal flow for crisis handling.
-- `Router` selects one route:
-  - `THERAPIST_SEARCH`
-  - `BOOKING_EMAIL`
-  - `COACH`
-- Specialized agents execute:
-  - `TherapistSearchAgent`: parses location/radius/specialty/limit, calls MCP therapist search, returns `ChatResponse.therapists`.
-  - `EmailBookingAgent`: manages pending booking state, collects missing fields, issues booking proposal, handles `YES`/`NO`, sends email via MCP.
+## 💡 What This App Solves
 
-## API Endpoints (Current)
-- `POST /chat`
-- `POST /therapists/search`
-- `POST /payments/create-checkout-session`
-- `POST /payments/webhook`
-- `GET /health`
-- `GET /status`
+MH Skills Coach **reduces friction in the mental health support journey** by combining both phases in a single, coherent workflow:
 
-## Data Flow Diagrams
+- **Immediate relief**: Users get evidence-based coping techniques (breathing exercises, grounding, cognitive reframing) instantly through conversational AI
+- **Streamlined care access**: Integrated therapist search and booking email assistance removes barriers to reaching out to providers
+- **Safety-first design**: Crisis detection with immediate escalation to emergency resources ensures users in danger get appropriate help
 
-### 1) Chat + RAG Flow
-```text
-[User]
-   |
-   v
-[Frontend (Next.js)]
-   |
-   v
-[POST /chat -> Backend Router]
-   |
-   +--> [SafetyGate] --(crisis)--> [Crisis response + guidance]
-   |
-   +--> [COACH route] --> [RAG/LLM path]
-                            |
-                            v
-                      [Postgres + pgvector]
-                            |
-                            v
-                       [ChatResponse]
+The app acts as a **bridge between self-help and professional care**, meeting users where they are and guiding them forward.
+
+---
+
+## ✨ Key Features
+
+### Multi-Agent Architecture
+- **SafetyGate**: Crisis detection and emergency resource routing (runs before all other agents)
+- **Router**: Intelligent intent classification directing to appropriate specialized agents
+- **TherapistSearchAgent**: Provider discovery with location-based search and premium gating
+- **BookingEmailAgent**: Multi-turn conversation state management for appointment scheduling
+- **Coach Agent**: RAG-enabled skills coaching with contextual guidance
+
+### Core Capabilities
+- **RAG-enabled coaching**: Retrieval-augmented generation pulls from evidence-based mental health resources (pgvector embeddings)
+- **Therapist search**: Location-based provider discovery via MCP tool integration
+- **Booking email assistant**: 
+  - Collects required information (therapist email, date/time)
+  - Generates professional booking email
+  - Requires **explicit YES confirmation** before sending
+  - Supports multi-turn pending state (15-minute expiry)
+- **Safety guardrails**: 
+  - No diagnosis or prescriptions
+  - Crisis keyword detection
+  - Prescription request blocking with referral to licensed care
+  - Sweden-specific emergency resources (112, 1177 Vårdguiden, Mind Självmordslinjen)
+- **Premium gating**: Stripe test-mode checkout and webhook handling for therapist search feature
+- **Authentication**: Google OAuth integration
+
+---
+
+## 🛠 Tech Stack
+
+### Frontend
+- **Next.js 14** (App Router)
+- **TypeScript**
+- **Tailwind CSS** + Radix UI components
+- **React 18** with Server Components
+
+### Backend
+- **FastAPI** (Python)
+- **LangGraph** for multi-agent orchestration
+- **SQLAlchemy** ORM
+- **Pydantic** for validation
+
+### Data & Storage
+- **PostgreSQL** with **pgvector** extension
+- Vector embeddings for RAG retrieval
+- User data, pending actions, Stripe event idempotency
+
+### AI & Tools
+- **LLM Providers**: OpenAI or Mock (configurable)
+- **Embedding Providers**: OpenAI
+- **MCP (Model Context Protocol)**: HTTP-based tool service
+  - `therapist_search` tool
+  - `send_email` tool (SMTP)
+
+### Infrastructure
+- **Docker Compose** for local orchestration
+- **Caddy** as reverse proxy (handles HTTPS, routing)
+- **Azure VM** for production deployment
+
+---
+
+## 🏗 Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         CLIENT                              │
+│                      (Web Browser)                          │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    CADDY PROXY                              │
+│              (Reverse Proxy + TLS)                          │
+│   Routes:                                                   │
+│   • / → Frontend (Next.js)                                  │
+│   • /api/* → Backend (FastAPI)                              │
+└────────────┬────────────────────────────┬───────────────────┘
+             │                            │
+             ▼                            ▼
+┌─────────────────────┐      ┌──────────────────────────────┐
+│   FRONTEND          │      │        BACKEND               │
+│   (Next.js 14)      │      │       (FastAPI)              │
+│                     │      │                              │
+│ • UI/UX             │      │ • Multi-agent routing        │
+│ • Auth pages        │      │ • Safety enforcement         │
+│ • Payment flow      │      │ • LLM orchestration          │
+│ • Chat client       │      │ • RAG retrieval              │
+└─────────────────────┘      │ • OAuth/Stripe handling      │
+                              └──────┬───────────┬───────────┘
+                                     │           │
+                    ┌────────────────┘           └────────────┐
+                    ▼                                         ▼
+        ┌────────────────────┐                   ┌──────────────────┐
+        │   POSTGRES         │                   │   MCP SERVICE    │
+        │   (+ pgvector)     │                   │   (Tool Layer)   │
+        │                    │                   │                  │
+        │ • Users            │                   │ • therapist_search│
+        │ • Pending actions  │                   │ • send_email      │
+        │ • Embeddings       │                   └──────────────────┘
+        │ • Stripe events    │
+        └────────────────────┘
 ```
 
-### 2) Therapist Search + Booking Email Flow
-```text
-[User chat intent]
-   |
-   v
-[POST /chat]
-   |
-   +--> [TherapistSearchAgent]
-   |        |
-   |        v
-   |   [MCP therapist_search]
-   |        |
-   |        v
-   |   [therapists[] in ChatResponse]
-   |
-   +--> [EmailBookingAgent]
-            |
-            v
-   [Pending proposal in DB -> requires_confirmation=true]
-            |
-            +-- "YES" --> [MCP send_email] --> [clear pending]
-            +-- "NO"  --> [clear pending]
+### Request Flow
+
+1. **User** sends message via frontend
+2. **Caddy** routes to backend at `/api/chat`
+3. **Backend** runs multi-agent pipeline:
+   - **SafetyGate** → Crisis check (can short-circuit)
+   - **Prescription check** → Blocks medical advice requests
+   - **Router** → Classifies intent (THERAPIST_SEARCH | BOOKING_EMAIL | COACH)
+   - **Specialized agent** executes based on route
+4. **Agent** may call:
+   - **Postgres** for RAG context retrieval
+   - **MCP service** for external tools
+   - **LLM provider** for response generation
+5. **Response** returned to frontend for display
+
+---
+
+## 🤖 Multi-Agent Design
+
+### Agent Responsibilities
+
+| Agent | Trigger | Function |
+|-------|---------|----------|
+| **SafetyGate** | All messages | Detects crisis keywords (suicide, self-harm), returns emergency resources |
+| **Prescription Blocker** | Medical keywords | Blocks diagnosis/medication requests, redirects to licensed care |
+| **Router** | Non-crisis messages | Classifies intent using rules + LLM fallback |
+| **TherapistSearchAgent** | "find therapist", location queries | Parses location/radius/specialty, calls MCP tool, returns provider list |
+| **BookingEmailAgent** | "book", "send email", confirmation replies | Manages pending state, collects missing fields, drafts email, handles YES/NO |
+| **Coach** | Default/fallback | RAG-enabled coping skills coaching (breathing, grounding, CBT techniques) |
+
+### Routing Policy
+
+```python
+if is_crisis(message):
+    return SafetyGate()  # Short-circuit with emergency resources
+
+if is_prescription_request(message):
+    return RefusalMessage()  # Short-circuit with referral
+
+route = Router.classify(message)
+
+if route == "THERAPIST_SEARCH":
+    return TherapistSearchAgent()
+elif route == "BOOKING_EMAIL":
+    return BookingEmailAgent()
+else:
+    return CoachAgent()  # RAG + LLM
 ```
 
-## Safety & Compliance
-- This app does **not** provide diagnosis, prescriptions, or medication instructions.
-- It is **not medical advice** and does not replace licensed care.
-- If self-harm/suicide intent is detected:
-  - The app provides supportive crisis guidance.
-  - Recommends contacting local emergency services and helplines.
-  - In Sweden context, messaging includes emergency/support references (for example 112, 1177, and suicide support lines).
-  - Suggests therapist search as next-step support when appropriate.
+---
 
-## Quickstart (Local)
+## 📡 API Endpoints
+
+### Backend Routes (FastAPI)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/chat` | Main chat endpoint, routes to multi-agent pipeline |
+| `POST` | `/therapists/search` | Direct therapist search (premium required) |
+| `POST` | `/payments/create-checkout-session` | Create Stripe checkout session for premium |
+| `POST` | `/payments/webhook` | Stripe webhook handler for payment events |
+| `GET` | `/health` | Health check (returns `{"status": "ok"}`) |
+| `GET` | `/status` | Detailed system status (LLM, DB, MCP connectivity) |
+| `GET` | `/auth/google/start` | Initiate Google OAuth flow |
+| `GET` | `/auth/google/callback` | OAuth callback handler |
+| `GET` | `/me` | Get current user info |
+| `POST` | `/logout` | Clear session cookie |
+
+### Frontend API Routes (Next.js)
+
+All frontend API calls are proxied through `/api/*` which routes to backend.
+
+Example: `POST /api/chat` → Backend `POST /chat`
+
+---
+
+## 📊 System Flows
+
+### Flow 1: Chat + RAG Coaching
+
+```
+┌─────────┐
+│  User   │ "I'm feeling anxious"
+└────┬────┘
+     │
+     ▼
+┌────────────────┐
+│  POST /chat    │
+└────┬───────────┘
+     │
+     ▼
+┌──────────────────┐
+│  SafetyGate      │ ──┐ (if crisis detected)
+└────┬─────────────┘   │
+     │                 ▼
+     │            ┌─────────────────────┐
+     │            │ Crisis Response     │
+     │            │ + Emergency Hotlines│
+     │            └─────────────────────┘
+     │ (no crisis)
+     ▼
+┌──────────────────┐
+│  Router          │ → Route: COACH
+└────┬─────────────┘
+     │
+     ▼
+┌──────────────────┐
+│  Coach Agent     │
+└────┬─────────────┘
+     │
+     ├─→ Query pgvector for similar chunks
+     │   (RAG context retrieval)
+     │
+     └─→ Call LLM with system prompt + context
+         │
+         ▼
+    ┌─────────────────────────────────┐
+    │ Response: "Try box breathing:   │
+    │ in for 4, hold 4, out 4, hold 4"│
+    └─────────────────────────────────┘
+```
+
+### Flow 2: Therapist Search + Booking
+
+```
+┌─────────┐
+│  User   │ "find therapist near Stockholm"
+└────┬────┘
+     │
+     ▼
+┌────────────────┐
+│  POST /chat    │
+└────┬───────────┘
+     │
+     ▼
+┌──────────────────┐
+│  SafetyGate      │ (pass)
+└────┬─────────────┘
+     │
+     ▼
+┌──────────────────┐
+│  Router          │ → Route: THERAPIST_SEARCH
+└────┬─────────────┘
+     │
+     ▼
+┌─────────────────────────┐
+│ TherapistSearchAgent    │
+└────┬────────────────────┘
+     │
+     ├─→ Premium check (in prod)
+     ├─→ Parse location: "Stockholm"
+     ├─→ Extract radius: 25km (default)
+     │
+     └─→ Call MCP tool: POST /tools/therapist_search
+         │
+         ▼
+    ┌─────────────────────────────────┐
+    │ Response: [                     │
+    │   {name: "Dr. X", address: ...},│
+    │   {name: "Clinic Y", ...}       │
+    │ ]                               │
+    └─────────────────────────────────┘
+         │
+         ▼
+    User selects provider
+         │
+         ▼
+┌─────────┐
+│  User   │ "book appointment with dr.x@clinic.se tomorrow at 3pm"
+└────┬────┘
+     │
+     ▼
+┌────────────────┐
+│  POST /chat    │
+└────┬───────────┘
+     │
+     ▼
+┌──────────────────┐
+│  Router          │ → Route: BOOKING_EMAIL
+└────┬─────────────┘
+     │
+     ▼
+┌─────────────────────────┐
+│ BookingEmailAgent       │
+└────┬────────────────────┘
+     │
+     ├─→ Parse email: dr.x@clinic.se
+     ├─→ Parse datetime: 2026-02-15 15:00
+     ├─→ Generate email draft
+     │
+     └─→ Save to DB (pending_actions)
+         │
+         ▼
+    ┌─────────────────────────────────┐
+    │ Response: Booking proposal      │
+    │ requires_confirmation: true     │
+    │ "Reply YES to send or NO"       │
+    └─────────────────────────────────┘
+         │
+         ▼
+    User: "YES"
+         │
+         ▼
+┌─────────────────────────┐
+│ BookingEmailAgent       │
+└────┬────────────────────┘
+     │
+     └─→ Call MCP tool: POST /tools/send_email
+         │
+         ▼
+    Email sent via SMTP
+         │
+         ▼
+    Clear pending_actions row
+```
+
+---
+
+## 🛡 Safety & Compliance
+
+### Core Boundaries
+
+This application **strictly prohibits**:
+- ❌ **Diagnosis**: No diagnostic interpretations or condition labeling
+- ❌ **Prescriptions**: No medication recommendations or dosing advice
+- ❌ **Clinical treatment**: No therapy, counseling, or clinical interventions
+
+### What We Provide Instead
+
+✅ **Evidence-based coping skills**: Breathing exercises, grounding techniques, cognitive reframing  
+✅ **Provider navigation**: Help users find licensed therapists and clinics  
+✅ **Administrative support**: Draft booking emails professionally  
+✅ **Crisis resources**: Immediate escalation with emergency contacts  
+
+### Crisis Handling
+
+When crisis keywords are detected (`suicide`, `self-harm`, `kill myself`, etc.):
+
+1. **Immediate response** with validation and empathy
+2. **Emergency services** (Sweden: 112)
+3. **Crisis hotlines**:
+   - Mind Självmordslinjen: 90101
+   - 1177 Vårdguiden
+4. **Optional therapist search** if location available and user has premium
+5. **No normal coaching flow** until crisis is addressed
+
+### Compliance Testing
+
+Safety behavior verified via:
+- `services/backend/tests/test_crisis_guardrail.py`
+- `services/backend/tests/test_safety.py`
+- `services/backend/tests/test_chat_prescription.py`
+
+---
+
+## 🚀 Local Development
+
+### Prerequisites
+
+- Docker & Docker Compose
+- (Optional) Node.js 18+ for local frontend dev
+- (Optional) Python 3.11+ for local backend dev
+
+### Quick Start
+
 ```bash
+# 1. Clone the repository
+git clone <your-repo-url>
+cd mh-skills-coach
+
+# 2. Copy environment file
+cp .env.example .env
+
+# 3. Configure .env (see Secrets section below)
+
+# 4. Start all services
 docker compose up -d --build
+
+# 5. Ingest RAG data (optional, for coaching responses)
 docker compose exec backend python -m app.ingest --path /data/papers --reset
+
+# 6. Verify health
+curl http://localhost:8000/health    # Backend
+curl http://localhost:7001/health    # MCP service
+curl http://localhost:3000           # Frontend
 ```
 
-## Deployment (Azure VM)
-1. Prepare production environment values:
+### Service URLs (Local)
+
+| Service | URL |
+|---------|-----|
+| Frontend | http://localhost:3000 |
+| Backend API | http://localhost:8000 |
+| Backend Status | http://localhost:8000/status |
+| MCP Tools | http://localhost:7001 |
+| Postgres | localhost:5432 |
+
+### Health Checks
+
 ```bash
+# Backend
+curl -fsS http://localhost:8000/health
+curl -fsS http://localhost:8000/status
+
+# MCP
+curl -fsS http://localhost:7001/health
+
+# Check logs
+docker compose logs -f backend
+docker compose logs -f frontend
+docker compose logs -f mcp
+```
+
+---
+
+## 🌐 Production Deployment (Azure VM)
+
+### Live URLs
+
+| Resource | URL |
+|----------|-----|
+| **Application** | [https://mh-skills-coach.francecentral.cloudapp.azure.com/](https://mh-skills-coach.francecentral.cloudapp.azure.com/) |
+| **Status Endpoint** | [https://mh-skills-coach.francecentral.cloudapp.azure.com/status](https://mh-skills-coach.francecentral.cloudapp.azure.com/status) |
+| **API Health** | [https://mh-skills-coach.francecentral.cloudapp.azure.com/api/health](https://mh-skills-coach.francecentral.cloudapp.azure.com/api/health) |
+| **Stripe Webhook** | [https://mh-skills-coach.francecentral.cloudapp.azure.com/api/payments/webhook](https://mh-skills-coach.francecentral.cloudapp.azure.com/api/payments/webhook) |
+
+### Deployment Steps
+
+```bash
+# 1. Prepare production environment
 cp .env.prod.example .env
-```
-2. Edit `.env` with real secrets (OAuth, Stripe, SMTP, OpenAI) and keep:
-- `FRONTEND_URL=https://mh-skills-coach.francecentral.cloudapp.azure.com`
-- `APP_BASE_URL=https://mh-skills-coach.francecentral.cloudapp.azure.com`
-- `GOOGLE_REDIRECT_URI=https://mh-skills-coach.francecentral.cloudapp.azure.com/auth/google/callback`
-- `NEXT_PUBLIC_API_BASE_URL=/api`
-3. Deploy on VM:
-```bash
+
+# 2. Edit .env with production values (see below)
+
+# 3. Deploy
 ./scripts/deploy_vm.sh
-```
-Equivalent command:
-```bash
+
+# Or manually:
 docker compose -f docker-compose.prod.yml up -d --build
+
+# 4. Verify deployment
+curl https://mh-skills-coach.francecentral.cloudapp.azure.com/status
 ```
-Production ingress files:
-- `docker-compose.prod.yml`
-- `Caddyfile.prod`
-Proxy rule:
-- public `/api/*` is stripped before forwarding to backend routes (for example, `/api/health` -> `/health`).
-4. Validate:
-- `https://mh-skills-coach.francecentral.cloudapp.azure.com/`
-- `https://mh-skills-coach.francecentral.cloudapp.azure.com/status`
-- `https://mh-skills-coach.francecentral.cloudapp.azure.com/api/health`
-- Stripe webhook endpoint: `https://mh-skills-coach.francecentral.cloudapp.azure.com/api/payments/webhook`
 
-## Additional Docs
-- `SPEC.md`
-- `SAFETY.md`
-- `TODO.md`
-- `docs/DEPLOYMENT.md`
-- `docs/DEPLOYMENT_AZURE.md`
 
-## Secrets & Environment
-- Copy `.env.example` to `.env` and configure values for your environment.
-- Never commit secrets (API keys, OAuth secrets, SMTP credentials, Stripe keys).
-- Keep all sensitive values in `.env` only.
+---
 
-Common variables (see `.env.example`):
-- App URLs: `FRONTEND_URL`, `NEXT_PUBLIC_API_BASE_URL`, `API_BASE_URL`, `APP_DOMAIN`
-- OAuth: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`
-- Payments: `STRIPE_SECRET_KEY`, `STRIPE_PRICE_ID`, `STRIPE_WEBHOOK_SECRET`
-- Backend/tooling: `DEV_MODE`, `DATABASE_URL`, `MCP_BASE_URL`, `LLM_PROVIDER`, `EMBED_PROVIDER`
-- SMTP tool config: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_USE_TLS`
 
-## Roadmap
-- Production deployment hardening and release automation.
-- Better provider filtering/ranking (specialty, availability, insurance/language options).
-- Product analytics for safety outcomes and conversion funnels.
 
-## Development Notes
-- Use `docker compose ps` to confirm healthy services.
-- Backend health/status checks:
-  - `curl -fsS http://localhost:8000/health`
-  - `curl -fsS http://localhost:8000/status`
-- MCP health check:
-  - `curl -fsS http://localhost:7001/health`
+## 📸 Screenshots
 
-## Screenshots / Demo
-- Placeholder: add chat, therapist-search, and booking-proposal screenshots here.
+> **Note:** Add screenshots here showing:
+> - Chat interface with coaching response
+> - Therapist search results
+> - Booking email proposal with confirmation
+> - Crisis response with emergency resources
+> - Premium upgrade flow
+
+---
+
+## 🗺 Roadmap
+
+### Testing & Quality
+- [ ] End-to-end integration tests for multi-agent flows
+- [ ] Continuous safety auditing and false positive/negative tracking
+- [ ] Load testing for production readiness
+- [ ] Automated regression testing in CI/CD
+
+### Features
+- [ ] Enhanced provider filtering and ranking (specialty, availability, insurance, language)
+- [ ] User feedback collection for continuous improvement
+- [ ] Conversation history and progress tracking
+- [ ] Mobile app (React Native or Flutter)
+
+### Operations
+- [ ] Automated deployment pipelines (GitHub Actions)
+- [ ] Monitoring and observability (Prometheus, Grafana, Sentry)
+- [ ] Database backup and disaster recovery procedures
+- [ ] Rate limiting and abuse prevention
+- [ ] Internationalization (i18n) beyond Sweden
+
+### Safety Enhancements
+- [ ] LLM-based crisis detection backup (complement keyword matching)
+- [ ] Output content filtering (detect medical advice in responses)
+- [ ] Conversation-level risk assessment
+- [ ] Human review queue for flagged conversations
+
+---
+
+## 📄 License
+
+[Your License Here - e.g., MIT, Apache 2.0, Proprietary]
+
+---
+
+## 🤝 Contributing
+
+[Add contribution guidelines if open source]
+
+---
+
+## 📞 Support
+
+For issues or questions:
+- GitHub Issues: [Your repo issues URL]
+- Email: [Your contact email]
+
+---
+
+## ⚖️ Legal Disclaimer
+
+**This application is not a substitute for professional mental health care.**
+
+MH Skills Coach provides educational information and self-help tools only. It does not:
+- Diagnose mental health conditions
+- Prescribe medications or treatments
+- Provide therapy or clinical counseling
+- Offer medical advice
+
+If you are experiencing a mental health crisis, please:
+- Call your local emergency number (Sweden: 112)
+- Contact a crisis helpline (Sweden: Mind Självmordslinjen 90101, 1177 Vårdguiden)
+- Visit the nearest emergency room
+
+Always consult with licensed healthcare professionals for medical decisions.
+
+---
+
+**Built with ❤️ for mental health support accessibility**
