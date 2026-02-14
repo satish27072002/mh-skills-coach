@@ -56,7 +56,7 @@ export default function Home() {
         setAuthStatus("loading");
       }
       try {
-        const res = await fetch("/api/me", { credentials: "include" });
+        const res = await fetch("/api/me", { credentials: "include", cache: "no-store" });
         if (res.status === 401) {
           if (!cancelled) {
             setIsAuthenticated(false);
@@ -103,7 +103,8 @@ export default function Home() {
     try {
       const res = await fetch("/api/payments/create-checkout-session", {
         method: "POST",
-        credentials: "include"
+        credentials: "include",
+        cache: "no-store"
       });
       if (!res.ok) {
         throw new Error("checkout_failed");
@@ -141,6 +142,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
+        cache: "no-store",
         body: JSON.stringify({ message: trimmed })
       });
       if (!res.ok) {
@@ -202,6 +204,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
+        cache: "no-store",
         body: JSON.stringify({
           location: therapistLocation.trim(),
           radius_km: radius
@@ -231,7 +234,7 @@ export default function Home() {
           <CardHeader>
             <CardTitle>Mental Health Skills Coach</CardTitle>
           </CardHeader>
-          <CardContent className="flex items-center gap-2 text-sm text-muted">
+          <CardContent className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             Checking session…
           </CardContent>
@@ -295,7 +298,7 @@ export default function Home() {
         <CardContent className="flex h-full flex-1 flex-col gap-4 p-4 sm:p-5">
           <div ref={listRef} className="flex-1 overflow-y-auto rounded-lg border bg-surface/80 p-3">
             {messages.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-center text-sm text-muted">
+              <div className="flex h-full items-center justify-center text-center text-sm text-muted-foreground">
                 Share how you are feeling, and I will suggest a grounded next step.
               </div>
             ) : null}
@@ -309,7 +312,7 @@ export default function Home() {
                 />
               ))}
               {isSending ? (
-                <div className="flex items-center gap-2 text-sm text-muted">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Thinking...
                 </div>
@@ -334,7 +337,7 @@ export default function Home() {
               placeholder="I feel anxious right now..."
             />
             <div className="flex items-center justify-between gap-3">
-              <span className="text-xs text-muted">Enter to send, Shift+Enter for newline</span>
+              <span className="text-xs text-muted-foreground">Enter to send, Shift+Enter for newline</span>
               <Button onClick={handleSend} disabled={isSending || !input.trim()}>
                 {isSending ? (
                   <>
@@ -361,11 +364,11 @@ export default function Home() {
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <label className="text-xs font-semibold uppercase tracking-[0.15em] text-muted">City or postcode</label>
+              <label className="text-xs font-semibold uppercase tracking-[0.15em] text-muted-foreground">City or postcode</label>
               <Input value={therapistLocation} onChange={(e) => setTherapistLocation(e.target.value)} placeholder="Stockholm" />
             </div>
             <div className="space-y-2">
-              <label className="text-xs font-semibold uppercase tracking-[0.15em] text-muted">Radius (km, optional)</label>
+              <label className="text-xs font-semibold uppercase tracking-[0.15em] text-muted-foreground">Radius (km, optional)</label>
               <Input value={therapistRadius} onChange={(e) => setTherapistRadius(e.target.value)} placeholder="10" />
             </div>
 
@@ -396,7 +399,7 @@ export default function Home() {
 
             {therapistResults && therapistResults.length > 0 ? (
               <div className="space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-[0.15em] text-muted">Results</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.15em] text-muted-foreground">Results</p>
                 <ul className="space-y-2 text-sm">
                   {therapistResults.map((therapist) => {
                     const link = therapist.source_url || therapist.url;
