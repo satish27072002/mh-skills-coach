@@ -518,26 +518,6 @@ curl https://mh-skills-coach.francecentral.cloudapp.azure.com/status
 
 ---
 
-## 📄 License
-
-[Your License Here - e.g., MIT, Apache 2.0, Proprietary]
-
----
-
-## 🤝 Contributing
-
-[Add contribution guidelines if open source]
-
----
-
-## 📞 Support
-
-For issues or questions:
-- GitHub Issues: [Your repo issues URL]
-- Email: [Your contact email]
-
----
-
 ## ⚖️ Legal Disclaimer
 
 **This application is not a substitute for professional mental health care.**
