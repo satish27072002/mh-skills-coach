@@ -7,7 +7,8 @@ from langgraph.graph import END, StateGraph
 
 from .db import pgvector_ready, retrieve_similar_chunks
 from .llm.provider import ProviderError, ProviderNotConfiguredError, generate_chat
-from .safety import is_crisis
+from .prompts import COACH_MASTER_PROMPT
+from .safety import filter_unsafe_response, is_crisis
 from .schemas import ChatResponse, Resource
 
 
@@ -58,21 +59,28 @@ def retrieve_context(state: AgentState) -> AgentState:
 def llm_response(state: AgentState) -> AgentState:
     message = state.get("user_message", "")
     chunks = state.get("retrieved_chunks", [])
-    context_text = "\n\n".join(
-        f"- {chunk['text']}" for chunk in chunks if chunk.get("text")
-    )
-    system_prompt = (
-        "You are a mental health skills coach. Do not diagnose or prescribe. "
-        "Keep responses supportive, practical, and concise."
-    )
+    context_blocks: list[str] = []
+    for idx, chunk in enumerate(chunks, start=1):
+        text = (chunk.get("text") or "").strip()
+        if not text:
+            continue
+        metadata = chunk.get("metadata") or {}
+        source = metadata.get("source_id") or metadata.get("title") or f"chunk_{idx}"
+        context_blocks.append(f"[{idx}] source={source}\n{text}")
+
     user_prompt = message
-    if context_text:
-        user_prompt = f"Context:\n{context_text}\n\nUser:\n{message}"
+    if context_blocks:
+        context_text = "\n\n".join(context_blocks)
+        user_prompt = (
+            "Use the retrieved context only when relevant.\n\n"
+            f"Retrieved context:\n{context_text}\n\n"
+            f"User message:\n{message}"
+        )
 
     try:
         content = generate_chat(
             messages=[{"role": "user", "content": user_prompt}],
-            system_prompt=system_prompt,
+            system_prompt=COACH_MASTER_PROMPT,
             timeout=180.0,
             keep_alive="10m",
             retrieved_chunks_count=len(chunks),
@@ -82,10 +90,11 @@ def llm_response(state: AgentState) -> AgentState:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    response_json = ChatResponse(
+    response = ChatResponse(
         coach_message=content
-    ).model_dump()
-    return {"response_json": response_json}
+    )
+    response = filter_unsafe_response(response)
+    return {"response_json": response.model_dump()}
 
 
 def format_response(state: AgentState) -> AgentState:

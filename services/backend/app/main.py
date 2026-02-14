@@ -49,7 +49,13 @@ from .llm.provider import (
 )
 from .mcp_client import mcp_therapist_search, probe_mcp_health
 from .models import StripeEvent, User
-from .safety import classify_intent, is_prescription_request, route_message, is_crisis
+from .safety import (
+    classify_intent,
+    contains_jailbreak_attempt,
+    is_prescription_request,
+    route_message,
+    is_crisis,
+)
 from .schemas import (
     BookingProposal,
     ChatRequest,
@@ -454,9 +460,15 @@ def status() -> dict[str, Any]:
     }
 
 
-def _set_cookie(response: Response, name: str, value: str) -> None:
+def _set_cookie(response: Response, name: str, value: str, request: Request | None = None) -> None:
     samesite = settings.cookie_samesite.lower()
     secure = settings.cookie_secure
+    # Dev over plain HTTP cannot round-trip Secure cookies. Keep prod secure by default.
+    if request is not None and settings.dev_mode:
+        forwarded_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+        request_is_https = request.url.scheme == "https" or forwarded_proto == "https"
+        if not request_is_https:
+            secure = False
     if samesite == "none" and not secure:
         logger.warning("COOKIE_SAMESITE=None requires COOKIE_SECURE=true; forcing secure")
         secure = True
@@ -497,7 +509,7 @@ def _ensure_booking_actor_key(user: User | None, request: Request, response: Res
     if existing:
         return existing
     token = secrets.token_urlsafe(24)
-    _set_cookie(response, BOOKING_SESSION_COOKIE_NAME, token)
+    _set_cookie(response, BOOKING_SESSION_COOKIE_NAME, token, request=request)
     return f"anon:{token}"
 
 
@@ -595,7 +607,7 @@ def _verify_id_token(id_token: str, token_keys: list[str]) -> dict[str, Any]:
 
 
 @app.get("/auth/google/start")
-def auth_google_start() -> Response:
+def auth_google_start(request: Request) -> Response:
     if not settings.google_client_id:
         return JSONResponse(status_code=501, content={"error": "google oauth not configured"})
 
@@ -614,8 +626,8 @@ def auth_google_start() -> Response:
     )
 
     response = RedirectResponse(url=auth_url, status_code=302)
-    _set_cookie(response, "pkce_verifier", code_verifier)
-    _set_cookie(response, "oauth_state", state)
+    _set_cookie(response, "pkce_verifier", code_verifier, request=request)
+    _set_cookie(response, "oauth_state", state, request=request)
     return response
 
 
@@ -653,7 +665,7 @@ def auth_google_callback(request: Request, db: Session = Depends(get_db)) -> Res
             db.commit()
             db.refresh(user)
         response = JSONResponse(content={"status": "stubbed"})
-        _set_cookie(response, settings.session_cookie_name, str(user.id))
+        _set_cookie(response, settings.session_cookie_name, str(user.id), request=request)
         return response
 
     try:
@@ -716,7 +728,7 @@ def auth_google_callback(request: Request, db: Session = Depends(get_db)) -> Res
 
     redirect_url = f"{settings.frontend_url.rstrip('/')}/"
     response = RedirectResponse(url=redirect_url, status_code=302)
-    _set_cookie(response, settings.session_cookie_name, str(user.id))
+    _set_cookie(response, settings.session_cookie_name, str(user.id), request=request)
     response.delete_cookie("pkce_verifier")
     response.delete_cookie("oauth_state")
     return response
@@ -776,6 +788,13 @@ def chat(
 ) -> ChatResponse:
     message = payload.message.strip()
     user = _get_user_from_cookie(db, request)
+    if contains_jailbreak_attempt(message):
+        return ChatResponse(
+            coach_message=(
+                "I can’t follow attempts to bypass safety boundaries. "
+                "I can still help with safe coping support, therapist search, or appointment email drafting."
+            )
+        )
     actor_key = _get_booking_actor_key(user, request)
     pending_action = None
     pending_expired = False

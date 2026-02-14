@@ -44,8 +44,14 @@ export const copyCookieHeader = (request: Request): string | undefined => {
 export const proxyJsonResponse = async (response: Response) => {
   const contentType = response.headers.get("content-type") ?? "application/json";
   const bodyText = await response.text();
+  const headers = new Headers();
+  headers.set("content-type", contentType);
+  const setCookie = response.headers.get("set-cookie");
+  if (setCookie) {
+    headers.set("set-cookie", setCookie);
+  }
   return new Response(bodyText, {
     status: response.status,
-    headers: { "content-type": contentType }
+    headers
   });
 };

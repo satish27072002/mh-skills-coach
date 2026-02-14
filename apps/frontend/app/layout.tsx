@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Inter, Plus_Jakarta_Sans } from "next/font/google";
+import { Toaster } from "sonner";
 import "./globals.css";
 
 export const metadata = {
@@ -28,6 +29,7 @@ export default function RootLayout({
     <html lang="en" className={`${inter.variable} ${jakarta.variable}`}>
       <body className="antialiased font-sans">
         {children}
+        <Toaster richColors position="top-right" />
       </body>
     </html>
   );

@@ -18,8 +18,10 @@ export type ChatResponse = {
   therapists?: {
     name: string;
     address: string;
-    url: string;
-    phone: string;
+    url?: string;
+    source_url?: string;
+    phone?: string;
+    email?: string;
     distance_km: number;
   }[];
   sources?: { source_id: string; text?: string; snippet?: string }[];

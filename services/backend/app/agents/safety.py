@@ -3,10 +3,13 @@ from __future__ import annotations
 from fastapi import HTTPException, Request
 
 from app.models import User
+from app.prompts import SAFETY_GATE_MASTER_PROMPT
 from app.safety import is_crisis
 from app.schemas import ChatResponse
 
 from .therapist_agent import TherapistSearchAgent
+
+SYSTEM_PROMPT = SAFETY_GATE_MASTER_PROMPT
 
 
 class SafetyGate:

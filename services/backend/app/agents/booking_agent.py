@@ -24,10 +24,12 @@ from app.booking import (
 )
 from app.email_orchestrator import EmailSendPayload
 from app.models import PendingAction, User
+from app.prompts import BOOKING_EMAIL_MASTER_PROMPT
 from app.schemas import BookingProposal, ChatResponse
 
 UTC = ZoneInfo("UTC")
 logger = logging.getLogger(__name__)
+SYSTEM_PROMPT = BOOKING_EMAIL_MASTER_PROMPT
 
 
 def is_confirmation_only_message(message: str) -> bool:

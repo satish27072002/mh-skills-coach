@@ -1,4 +1,5 @@
-from typing import Literal
+import re
+from typing import Literal, Tuple
 
 from .schemas import ChatResponse, Exercise, PremiumCta, Resource
 
@@ -19,6 +20,23 @@ CRISIS_KEYWORDS = [
     "cannot go on",
     "life isn't worth living"
 ]
+
+ADDITIONAL_CRISIS_KEYWORDS = [
+    "i want to kill myself",
+    "i will kill myself",
+    "i'm going to kill myself",
+    "i am going to kill myself",
+    "i will end my life",
+    "i'm going to end my life",
+    "i am going to end my life",
+    "i want to end my life",
+    "i will hurt myself",
+    "i'm going to hurt myself",
+    "i am going to hurt myself",
+]
+
+# Merge with stable order and without duplicates.
+CRISIS_KEYWORDS = list(dict.fromkeys([*CRISIS_KEYWORDS, *ADDITIONAL_CRISIS_KEYWORDS]))
 
 THERAPIST_SEARCH_KEYWORDS = [
     "find therapist",
@@ -79,10 +97,86 @@ PRESCRIPTION_KEYWORDS = [
     "diagnose"
 ]
 
+MEDICAL_ADVICE_OUTPUT_KEYWORDS = [
+    "take ",
+    "dosage",
+    "dose",
+    "mg",
+    "tablet",
+    "capsule",
+    "prescribe",
+    "prescription",
+    "medication",
+    "medicine",
+    "ssri",
+    "benzodiazepine",
+    "xanax",
+    "sertraline",
+    "fluoxetine",
+]
+
+JAILBREAK_PATTERNS = [
+    r"\bignore (all|any|previous|prior) (instructions|rules|policy)\b",
+    r"\boverride (the )?(system|safety|policy|rules)\b",
+    r"\breveal (the )?(system prompt|prompt|hidden prompt)\b",
+    r"\bjailbreak\b",
+    r"\bdeveloper mode\b",
+    r"\bdo anything now\b",
+    r"\byou are now (chatgpt|dan|unrestricted)\b",
+]
+
 
 def _contains_any(message: str, keywords: list[str]) -> bool:
     message_lower = message.lower()
     return any(keyword in message_lower for keyword in keywords)
+
+
+def contains_jailbreak_attempt(message: str) -> bool:
+    text = message.lower()
+    return any(re.search(pattern, text) for pattern in JAILBREAK_PATTERNS)
+
+
+def contains_medical_advice(text: str) -> bool:
+    return _contains_any(text, MEDICAL_ADVICE_OUTPUT_KEYWORDS)
+
+
+def filter_unsafe_response(response: ChatResponse) -> ChatResponse:
+    if not response or not response.coach_message:
+        return response
+    unsafe = contains_jailbreak_attempt(response.coach_message) or contains_medical_advice(response.coach_message)
+    if not unsafe:
+        return response
+
+    safe_resources = response.resources or [
+        Resource(title="Healthcare advice (Sweden)", url="https://www.1177.se/"),
+        Resource(title="Emergency services (Sweden)", url="https://www.112.se/"),
+    ]
+    return ChatResponse(
+        coach_message=(
+            "I can’t help with unsafe instructions or medical treatment advice. "
+            "I can help with coping skills and suggest contacting a licensed clinician for medical decisions."
+        ),
+        resources=safe_resources,
+        premium_cta=response.premium_cta,
+        risk_level=response.risk_level,
+    )
+
+
+def assess_conversation_risk(conversation_history: list[dict[str, str]]) -> Tuple[str, str | None]:
+    if not conversation_history:
+        return "normal", None
+    # Prioritize the latest user messages.
+    for turn in reversed(conversation_history):
+        text = (turn.get("content") or "").strip()
+        if not text:
+            continue
+        if contains_jailbreak_attempt(text):
+            return "jailbreak", text
+        if is_crisis(text):
+            return "crisis", text
+        if is_prescription_request(text):
+            return "medical", text
+    return "normal", None
 
 
 def is_crisis(message: str) -> bool:
