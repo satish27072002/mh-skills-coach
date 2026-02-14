@@ -21,9 +21,13 @@ EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 ISO_DATETIME_RE = re.compile(
     r"\b(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?)\b"
 )
-DATE_ONLY_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+DATE_ONLY_RE = re.compile(r"\b(20\d{2}-\d{2}-\d{2})\b")
 DATE_TIME_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2}(?:\s*[ap]m)?)\b", re.IGNORECASE)
 TIME_RE = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*([ap]m)?\b", re.IGNORECASE)
+TIME_HHMM_RE = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\b")
+DATE_TIME_WITH_AT_RE = re.compile(r"\b(20\d{2}-\d{2}-\d{2})\s+at\s+([01]?\d|2[0-3]):([0-5]\d)\b", re.IGNORECASE)
+TIME_ON_DATE_RE = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\s+on\s+(20\d{2}-\d{2}-\d{2})\b", re.IGNORECASE)
+ON_DATE_AT_TIME_RE = re.compile(r"\bon\s+(20\d{2}-\d{2}-\d{2})\s+at\s+([01]?\d|2[0-3]):([0-5]\d)\b", re.IGNORECASE)
 NAME_RE = re.compile(
     r"\b(?:my name is|i am|i'm)\s+([a-z][a-z\s.'-]{1,60})\b",
     re.IGNORECASE,
@@ -136,8 +140,34 @@ def _parse_time_token(text: str) -> tuple[int, int] | None:
     return hour, minute
 
 
-def parse_requested_datetime(message: str, now: datetime | None = None) -> tuple[datetime | None, str | None]:
-    now_local = now.astimezone(STOCKHOLM_TZ) if now else datetime.now(STOCKHOLM_TZ)
+def _build_datetime_from_date_time_tokens(
+    *,
+    date_text: str,
+    hour: int,
+    minute: int,
+    tz: ZoneInfo,
+) -> tuple[datetime | None, str | None]:
+    try:
+        base_date = datetime.strptime(date_text, "%Y-%m-%d").date()
+    except ValueError:
+        return None, "I could not parse the date. Please use YYYY-MM-DD."
+    return datetime(
+        year=base_date.year,
+        month=base_date.month,
+        day=base_date.day,
+        hour=hour,
+        minute=minute,
+        tzinfo=tz,
+    ), None
+
+
+def _parse_requested_datetime_with_clarification(
+    message: str,
+    *,
+    tz: ZoneInfo = STOCKHOLM_TZ,
+    now: datetime | None = None,
+) -> tuple[datetime | None, str | None]:
+    now_local = now.astimezone(tz) if now else datetime.now(tz)
 
     iso_match = ISO_DATETIME_RE.search(message)
     if iso_match:
@@ -147,37 +177,17 @@ def parse_requested_datetime(message: str, now: datetime | None = None) -> tuple
         try:
             dt = datetime.fromisoformat(raw)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=STOCKHOLM_TZ)
+                dt = dt.replace(tzinfo=tz)
             else:
-                dt = dt.astimezone(STOCKHOLM_TZ)
+                dt = dt.astimezone(tz)
             return dt, None
         except ValueError:
             return None, "I could not parse the date/time. Please use format YYYY-MM-DD HH:MM."
 
-    explicit_match = DATE_TIME_RE.search(message)
-    if explicit_match:
-        try:
-            base_date = datetime.strptime(explicit_match.group(1), "%Y-%m-%d").date()
-        except ValueError:
-            return None, "I could not parse the date. Please use YYYY-MM-DD."
-        parsed_time = _parse_time_token(explicit_match.group(2))
-        if not parsed_time:
-            return None, "I could not parse the time. Please include HH:MM (24h) or 3pm."
-        hour, minute = parsed_time
-        return datetime(
-            year=base_date.year,
-            month=base_date.month,
-            day=base_date.day,
-            hour=hour,
-            minute=minute,
-            tzinfo=STOCKHOLM_TZ
-        ), None
-
     lower = message.lower()
     has_tomorrow = "tomorrow" in lower
     weekday_match = WEEKDAY_RE.search(lower)
-    has_date_only = DATE_ONLY_RE.search(message) is not None
-    time_value = _parse_time_token(lower)
+    time_value = _parse_time_token(message)
 
     if has_tomorrow:
         if not time_value:
@@ -189,7 +199,7 @@ def parse_requested_datetime(message: str, now: datetime | None = None) -> tuple
             target_date.day,
             time_value[0],
             time_value[1],
-            tzinfo=STOCKHOLM_TZ
+            tzinfo=tz
         ), None
 
     if weekday_match:
@@ -205,23 +215,84 @@ def parse_requested_datetime(message: str, now: datetime | None = None) -> tuple
             candidate_date.day,
             time_value[0],
             time_value[1],
-            tzinfo=STOCKHOLM_TZ
+            tzinfo=tz
         )
         if candidate_dt <= now_local:
             candidate_dt = candidate_dt + timedelta(days=7)
         return candidate_dt, None
 
-    if has_date_only and not time_value:
+    explicit_match = DATE_TIME_RE.search(message)
+    if explicit_match:
+        parsed_time = _parse_time_token(explicit_match.group(2))
+        if not parsed_time:
+            return None, "I could not parse the time. Please include HH:MM (24h) or 3pm."
+        return _build_datetime_from_date_time_tokens(
+            date_text=explicit_match.group(1),
+            hour=parsed_time[0],
+            minute=parsed_time[1],
+            tz=tz,
+        )
+
+    date_time_at_match = DATE_TIME_WITH_AT_RE.search(message)
+    if date_time_at_match:
+        return _build_datetime_from_date_time_tokens(
+            date_text=date_time_at_match.group(1),
+            hour=int(date_time_at_match.group(2)),
+            minute=int(date_time_at_match.group(3)),
+            tz=tz,
+        )
+
+    time_on_date_match = TIME_ON_DATE_RE.search(message)
+    if time_on_date_match:
+        return _build_datetime_from_date_time_tokens(
+            date_text=time_on_date_match.group(3),
+            hour=int(time_on_date_match.group(1)),
+            minute=int(time_on_date_match.group(2)),
+            tz=tz,
+        )
+
+    on_date_at_time_match = ON_DATE_AT_TIME_RE.search(message)
+    if on_date_at_time_match:
+        return _build_datetime_from_date_time_tokens(
+            date_text=on_date_at_time_match.group(1),
+            hour=int(on_date_at_time_match.group(2)),
+            minute=int(on_date_at_time_match.group(3)),
+            tz=tz,
+        )
+
+    date_token_match = DATE_ONLY_RE.search(message)
+    time_token_match = TIME_HHMM_RE.search(message)
+    if date_token_match and time_token_match:
+        return _build_datetime_from_date_time_tokens(
+            date_text=date_token_match.group(1),
+            hour=int(time_token_match.group(1)),
+            minute=int(time_token_match.group(2)),
+            tz=tz,
+        )
+
+    if date_token_match and not time_token_match:
         return None, "Please include a time with the date (for example: 2026-02-14 15:00)."
-    if time_value and not (has_tomorrow or weekday_match or has_date_only):
+    if time_token_match and not date_token_match:
         return None, "Please include a date with the time (for example: 2026-02-14 15:00)."
 
     return None, None
 
 
+def parse_requested_datetime(
+    message: str,
+    *,
+    tz: ZoneInfo = STOCKHOLM_TZ,
+    now: datetime | None = None,
+) -> str | None:
+    parsed_dt, _ = _parse_requested_datetime_with_clarification(message, tz=tz, now=now)
+    if not parsed_dt:
+        return None
+    return parsed_dt.astimezone(tz).isoformat()
+
+
 def extract_booking_data(message: str, now: datetime | None = None) -> BookingExtraction:
     therapist_email = extract_email(message)
-    requested_dt, clarification = parse_requested_datetime(message, now=now)
+    requested_dt, clarification = _parse_requested_datetime_with_clarification(message, now=now)
     return BookingExtraction(
         therapist_email=therapist_email,
         requested_datetime=requested_dt,

@@ -295,7 +295,7 @@ def test_multiturn_booking_persists_for_anonymous_session(booking_db):
     assert pending_payload["therapist_email"] == "therapist@example.com"
     assert pending_payload["sender_name"] == "Satish"
 
-    second = client.post("/chat", json={"message": "2026-02-18 14:00"})
+    second = client.post("/chat", json={"message": "14:00 on 2026-02-17"})
 
     assert second.status_code == 200
     second_payload = second.json()

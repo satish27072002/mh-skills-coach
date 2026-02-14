@@ -157,12 +157,17 @@ class BookingEmailAgent:
                 )
 
             update = extract_booking_data(message)
+            requested_datetime_iso = (
+                update.requested_datetime.astimezone(STOCKHOLM_TZ).isoformat()
+                if update.requested_datetime
+                else None
+            )
             changed = False
             if not pending_payload.get("therapist_email") and update.therapist_email:
                 pending_payload["therapist_email"] = update.therapist_email
                 changed = True
-            if not pending_payload.get("requested_datetime_iso") and update.requested_datetime:
-                pending_payload["requested_datetime_iso"] = update.requested_datetime.isoformat()
+            if not pending_payload.get("requested_datetime_iso") and requested_datetime_iso:
+                pending_payload["requested_datetime_iso"] = requested_datetime_iso
                 changed = True
 
             if _pending_payload_complete(pending_payload):
