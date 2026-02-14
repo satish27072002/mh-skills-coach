@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from app import db
 from app.config import settings
-from app.main import app
+from app.main import BOOKING_SESSION_COOKIE_NAME, app
 from app.models import PendingAction, User
 
 
@@ -37,6 +37,18 @@ def _create_user() -> User:
 def _pending_count(user_id: str) -> int:
     with db.SessionLocal() as session:
         return session.query(PendingAction).filter(PendingAction.user_id == user_id).count()
+
+
+def _pending_payload(user_id: str) -> dict:
+    with db.SessionLocal() as session:
+        row = (
+            session.query(PendingAction)
+            .filter(PendingAction.user_id == user_id)
+            .order_by(PendingAction.created_at.desc())
+            .first()
+        )
+    assert row is not None
+    return json.loads(row.payload_json)
 
 
 def test_booking_missing_email_asks_for_email(booking_db):
@@ -262,3 +274,45 @@ def test_multiple_sequential_booking_emails_require_separate_confirmations(monke
     assert "sent" in confirm_second.json()["coach_message"].lower()
     assert _pending_count(str(user.id)) == 0
     assert sent_to == ["first@example.com", "second@example.com"]
+
+
+def test_multiturn_booking_persists_for_anonymous_session(booking_db):
+    client = TestClient(app)
+
+    first = client.post(
+        "/chat",
+        json={"message": "Draft appointment request email to therapist@example.com next week. My name is Satish."}
+    )
+
+    assert first.status_code == 200
+    first_payload = first.json()
+    assert "date/time" in first_payload["coach_message"].lower() or "time" in first_payload["coach_message"].lower()
+    session_token = client.cookies.get(BOOKING_SESSION_COOKIE_NAME)
+    assert session_token
+    actor_key = f"anon:{session_token}"
+    assert _pending_count(actor_key) == 1
+    pending_payload = _pending_payload(actor_key)
+    assert pending_payload["therapist_email"] == "therapist@example.com"
+    assert pending_payload["sender_name"] == "Satish"
+
+    second = client.post("/chat", json={"message": "2026-02-18 14:00"})
+
+    assert second.status_code == 200
+    second_payload = second.json()
+    assert second_payload.get("requires_confirmation") is True
+    assert second_payload.get("booking_proposal") is not None
+    assert second_payload["booking_proposal"]["therapist_email"] == "therapist@example.com"
+
+
+def test_email_intent_routes_to_booking_agent_not_coach(booking_db):
+    client = TestClient(app)
+
+    response = client.post(
+        "/chat",
+        json={"message": "can you send an email to therapist@example.com"}
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "date/time" in payload["coach_message"].lower() or "appointment" in payload["coach_message"].lower()
+    assert "can't send" not in payload["coach_message"].lower()

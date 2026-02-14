@@ -4,6 +4,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import desc, select
@@ -23,6 +24,10 @@ ISO_DATETIME_RE = re.compile(
 DATE_ONLY_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 DATE_TIME_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2}(?:\s*[ap]m)?)\b", re.IGNORECASE)
 TIME_RE = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*([ap]m)?\b", re.IGNORECASE)
+NAME_RE = re.compile(
+    r"\b(?:my name is|i am|i'm)\s+([a-z][a-z\s.'-]{1,60})\b",
+    re.IGNORECASE,
+)
 WEEKDAY_RE = re.compile(
     r"\b(mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:rs|rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b",
     re.IGNORECASE,
@@ -53,6 +58,7 @@ WEEKDAY_MAP = {
 class BookingExtraction:
     therapist_email: str | None
     requested_datetime: datetime | None
+    sender_name: str | None = None
     clarification: str | None = None
 
 
@@ -99,6 +105,14 @@ def extract_email(message: str) -> str | None:
     if not match:
         return None
     return match.group(1).lower()
+
+
+def extract_sender_name(message: str) -> str | None:
+    match = NAME_RE.search(message)
+    if not match:
+        return None
+    name = " ".join(match.group(1).strip().split())
+    return name[:80] if name else None
 
 
 def _parse_time_token(text: str) -> tuple[int, int] | None:
@@ -211,28 +225,37 @@ def extract_booking_data(message: str, now: datetime | None = None) -> BookingEx
     return BookingExtraction(
         therapist_email=therapist_email,
         requested_datetime=requested_dt,
+        sender_name=extract_sender_name(message),
         clarification=clarification
     )
 
 
 def build_booking_email_content(
-    user: User,
+    user: User | None,
     therapist_email: str,
-    requested_datetime: datetime
+    requested_datetime: datetime,
+    sender_name: str | None = None,
+    sender_email: str | None = None,
 ) -> dict[str, str]:
+    resolved_name = sender_name or (user.name if user and user.name else "A client")
+    resolved_email = sender_email or (user.email if user and user.email else None)
     timestamp = requested_datetime.astimezone(STOCKHOLM_TZ).strftime("%Y-%m-%d %H:%M")
     subject = f"Appointment request - {timestamp} (Europe/Stockholm)"
+    if resolved_email:
+        signature = f"{resolved_name}\n{resolved_email}"
+    else:
+        signature = resolved_name
     body = (
         "Hello,\n\n"
         f"I would like to request an appointment on {timestamp} (Europe/Stockholm).\n\n"
-        f"Best regards,\n{user.name}\n{user.email}"
+        f"Best regards,\n{signature}"
     )
     return {
         "therapist_email": therapist_email,
         "requested_datetime_iso": requested_datetime.astimezone(STOCKHOLM_TZ).isoformat(),
         "subject": subject,
         "body": body,
-        "reply_to": user.email
+        "reply_to": resolved_email
     }
 
 
@@ -264,7 +287,7 @@ def load_pending_booking(
 def save_pending_booking(
     db: Session,
     user_id: str,
-    payload: dict[str, str | None],
+    payload: dict[str, Any],
     now: datetime | None = None
 ) -> PendingAction:
     now_utc = now.astimezone(ZoneInfo("UTC")) if now else datetime.now(ZoneInfo("UTC"))
@@ -294,7 +317,7 @@ def clear_pending_booking(db: Session, pending: PendingAction) -> None:
     db.commit()
 
 
-def parse_pending_payload(pending: PendingAction) -> dict[str, str | None]:
+def parse_pending_payload(pending: PendingAction) -> dict[str, Any]:
     try:
         payload = json.loads(pending.payload_json)
     except (ValueError, TypeError):

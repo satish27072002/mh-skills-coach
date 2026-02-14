@@ -102,6 +102,7 @@ app.add_middleware(
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
+BOOKING_SESSION_COOKIE_NAME = "mh_booking_session"
 logger = logging.getLogger(__name__)
 UTC = ZoneInfo("UTC")
 _LAST_THERAPIST_LOCATION_BY_SESSION = LAST_THERAPIST_LOCATION_BY_SESSION
@@ -479,6 +480,27 @@ def _get_user_from_cookie(db: Session, request: Request) -> User | None:
     return db.get(User, parsed_user_id)
 
 
+def _get_booking_actor_key(user: User | None, request: Request) -> str | None:
+    if user:
+        return str(user.id)
+    session_token = request.cookies.get(BOOKING_SESSION_COOKIE_NAME)
+    if not session_token:
+        return None
+    normalized = session_token.strip()
+    if not normalized:
+        return None
+    return f"anon:{normalized}"
+
+
+def _ensure_booking_actor_key(user: User | None, request: Request, response: Response) -> str:
+    existing = _get_booking_actor_key(user, request)
+    if existing:
+        return existing
+    token = secrets.token_urlsafe(24)
+    _set_cookie(response, BOOKING_SESSION_COOKIE_NAME, token)
+    return f"anon:{token}"
+
+
 def _parse_user_id(value: str | None) -> UUID | None:
     if not value:
         return None
@@ -719,6 +741,7 @@ def get_me(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
 def logout() -> JSONResponse:
     response = JSONResponse(content={"status": "ok"})
     response.delete_cookie(settings.session_cookie_name)
+    response.delete_cookie(BOOKING_SESSION_COOKIE_NAME)
     return response
 
 
@@ -745,13 +768,19 @@ def therapists_search(
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(payload: ChatRequest, request: Request, db: Session = Depends(get_db)) -> ChatResponse:
+def chat(
+    payload: ChatRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> ChatResponse:
     message = payload.message.strip()
     user = _get_user_from_cookie(db, request)
+    actor_key = _get_booking_actor_key(user, request)
     pending_action = None
     pending_expired = False
-    if user:
-        pending_action, pending_expired = load_pending_booking(db, str(user.id))
+    if actor_key:
+        pending_action, pending_expired = load_pending_booking(db, actor_key)
 
     therapist_agent = _build_therapist_agent()
     safety_gate = SafetyGate(therapist_agent=therapist_agent)
@@ -773,15 +802,26 @@ def chat(payload: ChatRequest, request: Request, db: Session = Depends(get_db)) 
             ),
         )
     )
+    logger.info(
+        "chat_route_decision route=%s has_pending_booking=%s has_pending_location=%s user_id=%s actor_key=%s",
+        route,
+        bool(pending_action),
+        therapist_agent.has_pending_location_request(user=user, request=request),
+        str(user.id) if user else None,
+        actor_key,
+    )
 
     if route == "THERAPIST_SEARCH":
         return therapist_agent.handle(user=user, request=request, message=message)
 
     if route == "BOOKING_EMAIL":
+        if not actor_key:
+            actor_key = _ensure_booking_actor_key(user, request, response)
         booking_agent = _build_booking_agent()
         booking_response = booking_agent.handle(
             db=db,
             user=user,
+            actor_key=actor_key,
             message=message,
             pending_action=pending_action,
             pending_expired=pending_expired,
