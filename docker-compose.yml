@@ -120,6 +120,7 @@ services:
       - ./services/backend/sql:/sql:ro
     command: >
       bash -c "until pg_isready -h postgres -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\"; do sleep 1; done;
+      psql \"$$DB_INIT_URL\" -f /sql/create_users.sql;
       psql \"$$DB_INIT_URL\" -f /sql/create_outbound_emails.sql;
       psql \"$$DB_INIT_URL\" -f /sql/create_pending_actions.sql;
       if psql \"$$DB_INIT_URL\" -tAc \"select to_regclass('public.chunks')\" | grep -q chunks; then

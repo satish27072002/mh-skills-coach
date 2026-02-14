@@ -8,6 +8,7 @@ import urllib.parse
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, AsyncIterator
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -471,7 +472,20 @@ def _get_user_from_cookie(db: Session, request: Request) -> User | None:
     user_id = request.cookies.get(settings.session_cookie_name)
     if not user_id:
         return None
-    return db.get(User, int(user_id))
+    try:
+        parsed_user_id = UUID(user_id)
+    except ValueError:
+        return None
+    return db.get(User, parsed_user_id)
+
+
+def _parse_user_id(value: str | None) -> UUID | None:
+    if not value:
+        return None
+    try:
+        return UUID(value)
+    except ValueError:
+        return None
 
 
 def _build_router() -> ChatRouter:
@@ -605,9 +619,14 @@ def auth_google_callback(request: Request, db: Session = Depends(get_db)) -> Res
         raise HTTPException(status_code=400, detail="missing pkce verifier")
 
     if not settings.google_client_secret or not settings.google_client_id:
-        user = db.execute(select(User).where(User.email == "demo@example.com")).scalar_one_or_none()
+        demo_sub = "dev-local-demo-user"
+        user = db.execute(select(User).where(User.google_sub == demo_sub)).scalar_one_or_none()
         if not user:
-            user = User(email="demo@example.com", name="Demo User")
+            user = User(
+                google_sub=demo_sub,
+                email="demo@example.com",
+                name="Demo User"
+            )
             db.add(user)
             db.commit()
             db.refresh(user)
@@ -654,16 +673,24 @@ def auth_google_callback(request: Request, db: Session = Depends(get_db)) -> Res
             status_code=302
         )
     email = claims.get("email")
-    if not email:
-        raise HTTPException(status_code=400, detail="missing email")
+    google_sub = claims.get("sub")
+    if not google_sub:
+        raise HTTPException(status_code=400, detail="missing subject")
     name = claims.get("name") or claims.get("given_name") or "User"
 
-    user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+    user = db.execute(select(User).where(User.google_sub == google_sub)).scalar_one_or_none()
+    if not user and email:
+        user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+
     if not user:
-        user = User(email=email, name=name)
+        user = User(google_sub=google_sub, email=email, name=name)
         db.add(user)
-        db.commit()
-        db.refresh(user)
+    else:
+        user.google_sub = google_sub
+        user.email = email
+        user.name = name
+    db.commit()
+    db.refresh(user)
 
     redirect_url = f"{settings.frontend_url.rstrip('/')}/"
     response = RedirectResponse(url=redirect_url, status_code=302)
@@ -678,7 +705,14 @@ def get_me(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     user = _get_user_from_cookie(db, request)
     if not user:
         raise HTTPException(status_code=401, detail="not authenticated")
-    return {"id": user.id, "email": user.email, "name": user.name, "is_premium": user.is_premium}
+    return {
+        "id": str(user.id),
+        "google_sub": user.google_sub,
+        "email": user.email,
+        "name": user.name,
+        "is_premium": user.is_premium,
+        "premium_until": user.premium_until,
+    }
 
 
 @app.post("/logout")
@@ -832,10 +866,14 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)) -> dic
         session = event.get("data", {}).get("object", {})
         metadata = session.get("metadata", {})
         user_id = metadata.get("user_id") or session.get("client_reference_id")
-        if user_id:
-            user = db.get(User, int(user_id))
+        parsed_user_id = _parse_user_id(user_id)
+        if parsed_user_id:
+            user = db.get(User, parsed_user_id)
             if user:
                 user.is_premium = True
+                stripe_customer_id = session.get("customer")
+                if isinstance(stripe_customer_id, str) and stripe_customer_id.strip():
+                    user.stripe_customer_id = stripe_customer_id.strip()
 
     db.commit()
     return {"status": "processed"}

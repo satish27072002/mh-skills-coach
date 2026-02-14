@@ -2,15 +2,18 @@ import base64
 import json
 import logging
 import os
+from uuid import UUID
 
 os.environ["DATABASE_URL"] = "sqlite+pysqlite:///./test.db"
 
 from fastapi.testclient import TestClient
 
 from app.config import settings
+from app import db
 from app.db import init_db
 from app.main import app
 import app.main as main
+from app.models import User
 
 
 def test_state_mismatch_returns_400(monkeypatch):
@@ -122,3 +125,48 @@ def test_id_token_invalid_logs_decoded_claims(monkeypatch, caplog):
         "decoded_claims" in record.message and "accounts.google.com" in record.message
         for record in caplog.records
     )
+
+
+def test_google_callback_upserts_by_google_sub_and_sets_session_cookie(monkeypatch):
+    monkeypatch.setattr(settings, "google_client_id", "client-id")
+    monkeypatch.setattr(settings, "google_client_secret", "client-secret")
+    monkeypatch.setattr(settings, "frontend_url", "http://localhost:3000")
+    init_db()
+
+    token_payload = {
+        "id_token": "id-token",
+        "access_token": "access",
+        "token_type": "Bearer"
+    }
+
+    monkeypatch.setattr(main, "_exchange_code_for_tokens", lambda *_args, **_kwargs: (token_payload, 200))
+    monkeypatch.setattr(
+        main,
+        "_verify_id_token",
+        lambda *_args, **_kwargs: {
+            "sub": "google-sub-123",
+            "email": "upsert@example.com",
+            "name": "Upsert User"
+        }
+    )
+
+    client = TestClient(app)
+    client.cookies.set("oauth_state", "ok")
+    client.cookies.set("pkce_verifier", "ver")
+
+    first = client.get("/auth/google/callback?code=abc&state=ok", follow_redirects=False)
+    assert first.status_code == 302
+    assert settings.session_cookie_name in first.cookies
+    first_cookie_value = first.cookies.get(settings.session_cookie_name)
+    assert first_cookie_value is not None
+    UUID(first_cookie_value)
+
+    # Same google_sub should update existing user and keep same user id.
+    second = client.get("/auth/google/callback?code=abc&state=ok", follow_redirects=False)
+    assert second.status_code == 302
+    assert second.cookies.get(settings.session_cookie_name) == first_cookie_value
+
+    with db.SessionLocal() as session:
+        users = session.query(User).filter(User.google_sub == "google-sub-123").all()
+        assert len(users) == 1
+        assert users[0].email == "upsert@example.com"
