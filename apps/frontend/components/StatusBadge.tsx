@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Badge } from "./ui/badge";
 
 type StatusState = {
   mode: "deterministic" | "llm_rag" | null;
@@ -47,7 +48,7 @@ export default function StatusBadge({ fetcher = fetch }: { fetcher?: typeof fetc
 
   if (status.backend === "offline") {
     return (
-      <div className="rounded-full bg-coral/15 px-4 py-2 text-xs font-semibold text-coral">
+      <div className="rounded-full bg-red-100 px-4 py-2 text-xs font-semibold text-red-700 dark:bg-red-950/40 dark:text-red-300">
         API: offline
       </div>
     );
@@ -57,16 +58,11 @@ export default function StatusBadge({ fetcher = fetch }: { fetcher?: typeof fetc
 
   return (
     <div className="flex items-center gap-3 text-xs">
-      <div
-        className={`rounded-full px-3 py-1 text-white ${
-          status.mode === "llm_rag" ? "bg-emerald-600" : "bg-slate-600"
-        }`}
-        title={modeText}
-      >
+      <Badge variant={status.mode === "llm_rag" ? "success" : "secondary"} title={modeText}>
         Mode: {status.mode === "llm_rag" ? "LLM+RAG" : "Deterministic"}
-      </div>
+      </Badge>
       {status.model && (
-        <span className="rounded-full border border-ink/10 px-3 py-1 text-ink">Model: {status.model}</span>
+        <span className="rounded-full border px-3 py-1 text-foreground">Model: {status.model}</span>
       )}
     </div>
   );

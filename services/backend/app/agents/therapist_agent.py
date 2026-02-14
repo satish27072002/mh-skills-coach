@@ -7,6 +7,7 @@ from typing import Callable
 from fastapi import HTTPException, Request
 
 from app.models import User
+from app.prompts import THERAPIST_SEARCH_MASTER_PROMPT
 from app.schemas import ChatResponse, PremiumCta, TherapistResult
 
 
@@ -14,6 +15,7 @@ LAST_THERAPIST_LOCATION_BY_SESSION: dict[str, str] = {}
 PENDING_THERAPIST_QUERY_BY_SESSION: dict[str, "TherapistSearchParams"] = {}
 
 CITY_TOKEN_RE = re.compile(r"^[\w\-\s]{2,40}$", flags=re.IGNORECASE)
+SYSTEM_PROMPT = THERAPIST_SEARCH_MASTER_PROMPT
 
 
 def extract_location(message: str) -> str | None:

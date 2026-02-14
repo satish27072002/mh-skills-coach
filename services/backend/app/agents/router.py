@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Literal
 
-from app.booking import is_affirmative, is_booking_intent, is_negative
+from app.booking import is_booking_intent
 from app.safety import classify_intent
 
 
@@ -26,6 +26,16 @@ THERAPIST_SEARCH_KEYWORDS = [
 
 
 ChatRoute = Literal["THERAPIST_SEARCH", "BOOKING_EMAIL", "COACH"]
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+EMAIL_INTENT_KEYWORDS = (
+    "send email",
+    "email",
+    "appointment",
+    "schedule",
+    "book",
+    "contact therapist",
+    "draft email",
+)
 
 
 def _is_confirmation_only_message(message: str) -> bool:
@@ -60,6 +70,13 @@ def _is_therapist_search_intent(message: str) -> bool:
     return classify_intent(message) == "therapist_search"
 
 
+def _has_strong_email_intent(message: str) -> bool:
+    lower = message.lower()
+    if EMAIL_RE.search(message):
+        return True
+    return any(keyword in lower for keyword in EMAIL_INTENT_KEYWORDS)
+
+
 class ChatRouter:
     def __init__(self, llm_fallback: Callable[[str], ChatRoute | None] | None = None):
         self._llm_fallback = llm_fallback
@@ -67,12 +84,15 @@ class ChatRouter:
     def route(self, data: RouterInput) -> ChatRoute:
         message = data.message.strip()
 
-        # Confirmation/cancel replies should resolve booking state first.
-        if data.has_pending_booking and (is_affirmative(message) or is_negative(message)):
+        # Pending booking always continues through booking agent first.
+        if data.has_pending_booking:
             return "BOOKING_EMAIL"
 
         if data.has_pending_therapist_location and _looks_like_location_reply(message):
             return "THERAPIST_SEARCH"
+
+        if _has_strong_email_intent(message):
+            return "BOOKING_EMAIL"
 
         if _is_therapist_search_intent(message):
             return "THERAPIST_SEARCH"

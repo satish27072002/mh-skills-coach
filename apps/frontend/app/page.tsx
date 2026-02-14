@@ -1,10 +1,29 @@
-﻿"use client";
+"use client";
 
+import { ArrowUp, Loader2, Search } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+
+import AppShell from "../components/app-shell";
 import ChatBubble from "../components/ChatBubble";
 import StatusBadge from "../components/StatusBadge";
+import ThemeToggle from "../components/theme-toggle";
+import UserMenu from "../components/user-menu";
 import type { ChatResponse, Message } from "../components/chat-types";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle
+} from "../components/ui/dialog";
+import { Input } from "../components/ui/input";
+import { Separator } from "../components/ui/separator";
+import { Textarea } from "../components/ui/textarea";
 
 export default function Home() {
   const router = useRouter();
@@ -37,7 +56,7 @@ export default function Home() {
         setAuthStatus("loading");
       }
       try {
-        const res = await fetch("/api/me", { credentials: "include" });
+        const res = await fetch("/api/me", { credentials: "include", cache: "no-store" });
         if (res.status === 401) {
           if (!cancelled) {
             setIsAuthenticated(false);
@@ -45,9 +64,7 @@ export default function Home() {
           }
           const params = new URLSearchParams(window.location.search);
           const authError = params.get("auth_error");
-          const nextLoginUrl = authError
-            ? `/login?error=${encodeURIComponent(authError)}`
-            : "/login";
+          const nextLoginUrl = authError ? `/login?error=${encodeURIComponent(authError)}` : "/login";
           router.replace(nextLoginUrl);
           return;
         }
@@ -73,11 +90,12 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [router]);
 
   const startCheckout = async () => {
     if (!isAuthenticated) {
       setError("Please sign in to continue.");
+      toast.error("Please sign in to continue.");
       return;
     }
     setCheckoutLoading(true);
@@ -85,7 +103,8 @@ export default function Home() {
     try {
       const res = await fetch("/api/payments/create-checkout-session", {
         method: "POST",
-        credentials: "include"
+        credentials: "include",
+        cache: "no-store"
       });
       if (!res.ok) {
         throw new Error("checkout_failed");
@@ -98,6 +117,7 @@ export default function Home() {
       }
     } catch {
       setError("Unable to start checkout. Please try again.");
+      toast.error("Unable to start checkout. Please try again.");
     } finally {
       setCheckoutLoading(false);
     }
@@ -122,6 +142,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
+        cache: "no-store",
         body: JSON.stringify({ message: trimmed })
       });
       if (!res.ok) {
@@ -144,11 +165,9 @@ export default function Home() {
       setMessages((prev) => [...prev, assistantMsg]);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Something went wrong";
-      if (message === "Failed to fetch") {
-        setError("Failed to reach the API.");
-      } else {
-        setError(message);
-      }
+      const uiMessage = message === "Failed to fetch" ? "Failed to reach the API." : message;
+      setError(uiMessage);
+      toast.error(uiMessage);
     } finally {
       setIsSending(false);
     }
@@ -172,7 +191,8 @@ export default function Home() {
       return;
     }
     if (!therapistLocation.trim()) {
-      setTherapistError("Please enter a city or postcode.");
+      const message = "Please enter a city or postcode.";
+      setTherapistError(message);
       return;
     }
     setTherapistLoading(true);
@@ -184,6 +204,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
+        cache: "no-store",
         body: JSON.stringify({
           location: therapistLocation.trim(),
           radius_km: radius
@@ -194,9 +215,13 @@ export default function Home() {
       }
       const data = (await res.json()) as { results: ChatResponse["therapists"] };
       setTherapistResults(data.results || []);
+      if (!data.results || data.results.length === 0) {
+        toast.message("No providers found for that area.");
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Search failed.";
       setTherapistError(message);
+      toast.error(message);
     } finally {
       setTherapistLoading(false);
     }
@@ -204,26 +229,31 @@ export default function Home() {
 
   if (authStatus === "loading") {
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-slate-50 text-ink">
-        <div className="rounded-2xl border border-slate-200 bg-white px-8 py-6 text-center shadow-sm">
-          <h1 className="font-display text-2xl">Mental Health Skills Coach</h1>
-          <p className="mt-2 text-sm text-ink/70">Checking session…</p>
-        </div>
+      <main className="flex min-h-screen items-center justify-center px-4">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>Mental Health Skills Coach</CardTitle>
+          </CardHeader>
+          <CardContent className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Checking session…
+          </CardContent>
+        </Card>
       </main>
     );
   }
 
   return (
-    <main className="flex min-h-screen flex-col bg-slate-50 text-ink">
-      <header className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-4">
-        <div>
-          <p className="text-xs uppercase tracking-[0.25em] text-ink/60">Mental Health Skills Coach</p>
-          <h1 className="font-display text-2xl text-ink">Steadying routines, one chat at a time</h1>
-        </div>
-        <div className="flex items-center gap-3">
+    <AppShell
+      title="Steadying routines, one chat at a time"
+      subtitle="Practical support, therapist discovery, and confirmation-based booking emails in one flow."
+      actions={
+        <>
           <StatusBadge />
-          <button
-            className="rounded-full bg-coral px-4 py-2 text-xs font-semibold text-white shadow disabled:opacity-60"
+          <ThemeToggle />
+          <Button
+            variant={premiumStatus === "premium" ? "default" : "secondary"}
+            size="sm"
             onClick={() => {
               if (premiumStatus === "premium") {
                 setTherapistModalOpen(true);
@@ -235,164 +265,166 @@ export default function Home() {
             }}
             disabled={checkoutLoading || premiumStatus === "unknown"}
           >
+            <Search className="h-4 w-4" />
             {premiumStatus === "premium" ? "Find a therapist" : "Get Premium to find a therapist"}
-          </button>
+          </Button>
           {premiumStatus === "premium" ? (
-            <button
-              className="rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-semibold text-emerald-700"
-              disabled
-            >
-              Premium Active
-            </button>
+            <Badge variant="success">Premium Active</Badge>
           ) : (
-            <button
-              className="rounded-full bg-ink px-4 py-2 text-xs font-semibold text-white shadow disabled:opacity-60"
+            <Button
+              variant="default"
+              size="sm"
               onClick={startCheckout}
               disabled={checkoutLoading || premiumStatus === "unknown"}
             >
               {checkoutLoading ? "Opening..." : premiumStatus === "unknown" ? "Checking..." : "Get Premium"}
-            </button>
+            </Button>
           )}
-        </div>
-      </header>
-
-      {error && (
-        <div className="mx-4 mt-4 rounded-xl border border-coral/40 bg-coral/10 p-3 text-sm text-ink">
-          {error}
-        </div>
-      )}
-
-      <div className="flex flex-1 flex-col px-4 py-4">
-        <div
-          ref={listRef}
-          className="flex-1 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
-        >
-          {messages.length === 0 && (
-            <div className="flex h-full items-center justify-center text-sm text-ink/60">
-              Share how you are feeling, and I will suggest a grounded next step.
-            </div>
-          )}
-          <div className="space-y-4">
-            {messages.map((msg) => (
-              <ChatBubble
-                key={msg.id}
-                message={msg}
-                onBookingAction={handleBookingAction}
-                bookingActionDisabled={isSending}
-              />
-            ))}
-            {isSending && <div className="flex justify-start text-sm text-ink/60">Thinking...</div>}
-          </div>
-        </div>
-
-        {therapistModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 px-4">
-            <div className="w-full max-w-lg space-y-4 rounded-2xl bg-white p-5 shadow-xl">
-              <div className="flex items-center justify-between">
-                <h2 className="font-display text-lg text-ink">Therapist search</h2>
-                <button
-                  className="text-sm text-ink/60"
-                  onClick={() => setTherapistModalOpen(false)}
-                >
-                  Close
-                </button>
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-[0.15em] text-ink/60">
-                  City or postcode
-                </label>
-                <input
-                  value={therapistLocation}
-                  onChange={(e) => setTherapistLocation(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="Stockholm"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-[0.15em] text-ink/60">
-                  Radius (km, optional)
-                </label>
-                <input
-                  value={therapistRadius}
-                  onChange={(e) => setTherapistRadius(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  placeholder="10"
-                />
-              </div>
-              {therapistError && (
-                <div className="rounded-xl border border-coral/40 bg-coral/10 p-2 text-sm text-ink">
-                  {therapistError}
-                </div>
-              )}
-              <div className="flex flex-col items-end gap-2">
-                {premiumStatus === "premium" ? (
-                  <button
-                    className="rounded-full bg-ink px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                    onClick={handleTherapistSearch}
-                    disabled={therapistLoading}
-                  >
-                    {therapistLoading ? "Searching..." : "Search"}
-                  </button>
-                ) : (
-                  <button
-                    className="rounded-full bg-ink px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                    onClick={startCheckout}
-                    disabled={checkoutLoading}
-                  >
-                    {checkoutLoading ? "Opening..." : "Get Premium"}
-                  </button>
-                )}
-                {premiumStatus !== "premium" && (
-                  <p className="text-xs text-ink/60">Premium is required to search therapists.</p>
-                )}
-              </div>
-              {therapistResults && therapistResults.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink/60">Results</p>
-                  <ul className="space-y-2 text-sm">
-                    {therapistResults.map((therapist) => (
-                      <li key={`${therapist.name}-${therapist.address}`} className="rounded-xl border border-slate-200 p-3">
-                        <a className="font-semibold underline" href={therapist.url} target="_blank" rel="noreferrer">
-                          {therapist.name}
-                        </a>
-                        <p className="text-ink/70">{therapist.address}</p>
-                        <p className="text-ink/70">Distance: {therapist.distance_km} km</p>
-                        <p className="text-ink/70">Phone: {therapist.phone}</p>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            rows={3}
-            className="w-full resize-none rounded-xl border border-slate-200 p-3 text-sm text-ink outline-none focus:ring-2 focus:ring-coral/60"
-            placeholder="I feel anxious right now..."
+          <UserMenu
+            isAuthenticated={isAuthenticated}
+            isPremium={premiumStatus === "premium"}
+            onUpgrade={startCheckout}
           />
-          <div className="mt-2 flex items-center justify-between">
-            <span className="text-xs text-ink/50">Enter to send, Shift+Enter for newline</span>
-            <button
-              onClick={handleSend}
-              disabled={isSending || !input.trim()}
-              className="rounded-full bg-ink px-4 py-2 text-sm font-semibold text-white shadow hover:bg-ink/90 disabled:opacity-50"
-            >
-              {isSending ? "Thinking..." : "Send"}
-            </button>
+        </>
+      }
+    >
+      {error ? (
+        <Card className="mb-4 border-red-200 bg-red-50 dark:border-red-900/70 dark:bg-red-950/30">
+          <CardContent className="p-3 text-sm text-red-700 dark:text-red-300">{error}</CardContent>
+        </Card>
+      ) : null}
+
+      <Card className="flex min-h-[56vh] flex-1 flex-col">
+        <CardContent className="flex h-full flex-1 flex-col gap-4 p-4 sm:p-5">
+          <div ref={listRef} className="flex-1 overflow-y-auto rounded-lg border bg-surface/80 p-3">
+            {messages.length === 0 ? (
+              <div className="flex h-full items-center justify-center text-center text-sm text-muted-foreground">
+                Share how you are feeling, and I will suggest a grounded next step.
+              </div>
+            ) : null}
+            <div className="space-y-4">
+              {messages.map((msg) => (
+                <ChatBubble
+                  key={msg.id}
+                  message={msg}
+                  onBookingAction={handleBookingAction}
+                  bookingActionDisabled={isSending}
+                />
+              ))}
+              {isSending ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Thinking...
+                </div>
+              ) : null}
+            </div>
           </div>
-        </div>
-      </div>
-    </main>
+
+          <Separator />
+
+          <div className="space-y-2">
+            <Textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              rows={3}
+              className="resize-none"
+              placeholder="I feel anxious right now..."
+            />
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs text-muted-foreground">Enter to send, Shift+Enter for newline</span>
+              <Button onClick={handleSend} disabled={isSending || !input.trim()}>
+                {isSending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Thinking...
+                  </>
+                ) : (
+                  <>
+                    <ArrowUp className="h-4 w-4" />
+                    Send
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Dialog open={therapistModalOpen} onOpenChange={setTherapistModalOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Therapist search</DialogTitle>
+            <DialogDescription>Search local providers by city/postcode and optional radius.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase tracking-[0.15em] text-muted-foreground">City or postcode</label>
+              <Input value={therapistLocation} onChange={(e) => setTherapistLocation(e.target.value)} placeholder="Stockholm" />
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase tracking-[0.15em] text-muted-foreground">Radius (km, optional)</label>
+              <Input value={therapistRadius} onChange={(e) => setTherapistRadius(e.target.value)} placeholder="10" />
+            </div>
+
+            {therapistError ? (
+              <div className="rounded-md border border-red-200 bg-red-50 p-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+                {therapistError}
+              </div>
+            ) : null}
+
+            <div className="flex justify-end">
+              {premiumStatus === "premium" ? (
+                <Button onClick={handleTherapistSearch} disabled={therapistLoading}>
+                  {therapistLoading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Searching...
+                    </>
+                  ) : (
+                    "Search"
+                  )}
+                </Button>
+              ) : (
+                <Button onClick={startCheckout} disabled={checkoutLoading}>
+                  {checkoutLoading ? "Opening..." : "Get Premium"}
+                </Button>
+              )}
+            </div>
+
+            {therapistResults && therapistResults.length > 0 ? (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.15em] text-muted-foreground">Results</p>
+                <ul className="space-y-2 text-sm">
+                  {therapistResults.map((therapist) => {
+                    const link = therapist.source_url || therapist.url;
+                    return (
+                      <li key={`${therapist.name}-${therapist.address}`} className="rounded-lg border p-3">
+                        {link ? (
+                          <a className="font-semibold underline" href={link} target="_blank" rel="noreferrer">
+                            {therapist.name}
+                          </a>
+                        ) : (
+                          <p className="font-semibold">{therapist.name}</p>
+                        )}
+                        <p className="text-foreground/70">{therapist.address}</p>
+                        <p className="text-foreground/70">Distance: {therapist.distance_km} km</p>
+                        {therapist.phone ? <p className="text-foreground/70">Phone: {therapist.phone}</p> : null}
+                        {therapist.email ? <p className="text-foreground/70">Email: {therapist.email}</p> : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </AppShell>
   );
 }

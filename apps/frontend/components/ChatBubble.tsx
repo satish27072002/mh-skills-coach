@@ -1,6 +1,12 @@
 "use client";
 
+import { AlertTriangle, ExternalLink, Mail, Phone } from "lucide-react";
+
 import type { Message } from "./chat-types";
+import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
+import { Separator } from "./ui/separator";
 
 type BookingAction = "YES" | "NO";
 
@@ -22,134 +28,162 @@ export default function ChatBubble({
   bookingActionDisabled?: boolean;
 }) {
   const isUser = message.role === "user";
-  const showBookingCard = Boolean(
-    !isUser && message.requires_confirmation && message.booking_proposal
-  );
+  const showBookingCard = Boolean(!isUser && message.requires_confirmation && message.booking_proposal);
   const bookingProposal = message.booking_proposal;
   const isCrisis = !isUser && message.risk_level === "crisis";
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
-        className={`max-w-[80%] space-y-3 rounded-2xl px-4 py-3 text-sm shadow ${
-          isUser ? "bg-ink text-white" : "bg-slate-100 text-ink"
-        } ${isCrisis ? "border-2 border-red-500 bg-red-50" : ""}`}
+        className={`max-w-[92%] space-y-3 rounded-xl border px-4 py-3 text-sm shadow-sm sm:max-w-[80%] ${
+          isUser
+            ? "border-primary bg-primary text-[color:var(--background)]"
+            : isCrisis
+              ? "border-red-300 bg-red-50 text-foreground dark:border-red-900 dark:bg-red-950/30"
+              : "bg-surface text-foreground"
+        }`}
       >
-        {isCrisis && (
-          <p className="text-xs font-semibold uppercase tracking-[0.15em] text-red-700">
+        {isCrisis ? (
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.15em] text-red-700 dark:text-red-300">
+            <AlertTriangle className="h-3.5 w-3.5" />
             Crisis support
-          </p>
-        )}
-        <p className="whitespace-pre-wrap">{message.content}</p>
+          </div>
+        ) : null}
 
-        {message.exercise && (
+        <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
+
+        {message.exercise ? (
           <div className="space-y-1">
-            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink/60">
+            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-muted-foreground">
               {message.exercise.type} - {message.exercise.duration_seconds}s
             </p>
-            <ul className={`list-disc pl-4 ${isUser ? "text-white/80" : "text-ink/80"}`}>
+            <ul className={`list-disc space-y-1 pl-4 ${isUser ? "text-[color:var(--background)]" : "text-muted-foreground"}`}>
               {message.exercise.steps.map((step) => (
                 <li key={step}>{step}</li>
               ))}
             </ul>
           </div>
-        )}
+        ) : null}
 
-        {message.resources && message.resources.length > 0 && (
-          <div className="space-y-1">
-            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink/60">Resources</p>
-            <ul className="space-y-1">
-              {message.resources.map((r) => (
-                <li key={r.url}>
-                  <a className="underline underline-offset-4" href={r.url} target="_blank" rel="noreferrer">
-                    {r.title}
+        {message.resources && message.resources.length > 0 ? (
+          <div className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-muted-foreground">Resources</p>
+            <ul className="space-y-2">
+              {message.resources.map((resource) => (
+                <li key={resource.url}>
+                  <a className="inline-flex items-center gap-1 text-sm font-semibold underline" href={resource.url} target="_blank" rel="noreferrer">
+                    {resource.title}
+                    <ExternalLink className="h-3.5 w-3.5" />
                   </a>
-                  {r.description && <p className="text-xs opacity-80">{r.description}</p>}
+                  {resource.description ? <p className="text-xs text-muted-foreground">{resource.description}</p> : null}
                 </li>
               ))}
             </ul>
           </div>
-        )}
+        ) : null}
 
-        {message.therapists && message.therapists.length > 0 && (
-          <div className="space-y-1">
-            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink/60">Therapists</p>
+        {message.therapists && message.therapists.length > 0 ? (
+          <div className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-muted-foreground">Therapists</p>
             <ul className="space-y-2 text-sm">
-              {message.therapists.map((t) => (
-                <li key={`${t.name}-${t.address}`} className="rounded-lg border border-slate-200 p-2">
-                  <a className="font-semibold underline" href={t.url} target="_blank" rel="noreferrer">
-                    {t.name}
-                  </a>
-                  <p className="text-ink/70">{t.address}</p>
-                  <p className="text-ink/70">Distance: {t.distance_km} km</p>
-                  <p className="text-ink/70">Phone: {t.phone}</p>
-                </li>
-              ))}
+              {message.therapists.map((therapist) => {
+                const link = therapist.source_url || therapist.url;
+                return (
+                  <li key={`${therapist.name}-${therapist.address}`} className="rounded-lg border bg-card p-3 text-foreground">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="font-semibold">{therapist.name}</p>
+                      <Badge variant="outline">{therapist.distance_km} km</Badge>
+                    </div>
+                    <p className="mt-1 text-muted-foreground">{therapist.address}</p>
+                    <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
+                      {therapist.phone ? (
+                        <span className="inline-flex items-center gap-1">
+                          <Phone className="h-3.5 w-3.5" />
+                          {therapist.phone}
+                        </span>
+                      ) : null}
+                      {therapist.email ? (
+                        <span className="inline-flex items-center gap-1">
+                          <Mail className="h-3.5 w-3.5" />
+                          {therapist.email}
+                        </span>
+                      ) : null}
+                      {link ? (
+                        <a className="inline-flex items-center gap-1 font-semibold underline" href={link} target="_blank" rel="noreferrer">
+                          View source
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      ) : null}
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           </div>
-        )}
+        ) : null}
 
-        {message.sources && message.sources.length > 0 && (
-          <details className="rounded-lg border border-slate-200 bg-white/80 p-2 text-ink">
+        {message.sources && message.sources.length > 0 ? (
+          <details className="rounded-lg border bg-card p-2 text-foreground">
             <summary className="cursor-pointer text-xs font-semibold">Sources</summary>
-            <ul className="space-y-1 pt-2 text-xs">
-              {message.sources.map((s, idx) => (
-                <li key={`${s.source_id}-${idx}`}>
-                  <p className="font-semibold">{s.source_id}</p>
-                  <p className="whitespace-pre-wrap text-ink/70">{s.snippet || s.text || "Excerpt unavailable."}</p>
+            <ul className="space-y-2 pt-2 text-xs">
+              {message.sources.map((source, idx) => (
+                <li key={`${source.source_id}-${idx}`}>
+                  <p className="font-semibold">{source.source_id}</p>
+                  <p className="whitespace-pre-wrap text-muted-foreground">{source.snippet || source.text || "Excerpt unavailable."}</p>
                 </li>
               ))}
             </ul>
           </details>
-        )}
+        ) : null}
 
-        {message.premium_cta?.enabled && (
-          <div className="rounded-lg border border-coral/40 bg-coral/10 p-2 text-ink">
-            <p className="text-xs font-semibold uppercase tracking-[0.15em]">Premium</p>
-            <p>{message.premium_cta.message}</p>
-          </div>
-        )}
+        {message.premium_cta?.enabled ? (
+          <Card className="border-amber-300/70 bg-amber-50 dark:bg-amber-950/20">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Premium</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-foreground">{message.premium_cta.message}</p>
+            </CardContent>
+          </Card>
+        ) : null}
 
-        {showBookingCard && bookingProposal && (
-          <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-ink">
-            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-amber-900">
-              Booking proposal
-            </p>
-            <p>
-              <span className="font-semibold">Therapist email:</span> {bookingProposal.therapist_email}
-            </p>
-            <p>
-              <span className="font-semibold">Requested time:</span> {bookingProposal.requested_time}
-            </p>
-            <p>
-              <span className="font-semibold">Subject:</span> {bookingProposal.subject}
-            </p>
-            <p className="whitespace-pre-wrap">
-              <span className="font-semibold">Body:</span> {bookingProposal.body}
-            </p>
-            <p className="text-xs text-ink/70">
-              Expires at: {formatExpiry(bookingProposal.expires_at)}
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                className="rounded-full bg-ink px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
-                onClick={() => onBookingAction?.("YES")}
-                disabled={bookingActionDisabled}
-              >
-                Send email
-              </button>
-              <button
-                type="button"
-                className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-ink disabled:opacity-50"
-                onClick={() => onBookingAction?.("NO")}
-                disabled={bookingActionDisabled}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
+        {showBookingCard && bookingProposal ? (
+          <Card className="border-amber-300 bg-amber-50 text-foreground dark:bg-amber-950/20">
+            <CardHeader>
+              <CardTitle className="text-sm uppercase tracking-[0.15em] text-amber-900 dark:text-amber-200">Booking proposal</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              <p>
+                <span className="font-semibold">Therapist email:</span> {bookingProposal.therapist_email}
+              </p>
+              <p>
+                <span className="font-semibold">Requested time:</span> {bookingProposal.requested_time}
+              </p>
+              <p>
+                <span className="font-semibold">Subject:</span> {bookingProposal.subject}
+              </p>
+              <p className="whitespace-pre-wrap">
+                <span className="font-semibold">Body:</span> {bookingProposal.body}
+              </p>
+              <Separator />
+              <p className="text-xs text-muted-foreground">Expires at: {formatExpiry(bookingProposal.expires_at)}</p>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <Button type="button" size="sm" onClick={() => onBookingAction?.("YES")} disabled={bookingActionDisabled}>
+                  Send email
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onBookingAction?.("NO")}
+                  disabled={bookingActionDisabled}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
       </div>
     </div>
   );

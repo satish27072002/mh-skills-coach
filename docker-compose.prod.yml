@@ -1,13 +1,14 @@
 services:
   proxy:
     image: caddy:2-alpine
+    restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
-    environment:
-      - APP_DOMAIN=${APP_DOMAIN:-localhost}
+    env_file:
+      - .env
     volumes:
-      - ./Caddyfile.local:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile.prod:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
@@ -19,20 +20,19 @@ services:
   frontend:
     build:
       context: ./apps/frontend
-    ports:
-      - "3000:3000"
+    restart: unless-stopped
     env_file:
       - .env
     environment:
       - API_BASE_URL=http://backend:8000
-      - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+      - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-/api}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 6
       start_period: 20s
     depends_on:
       backend:
@@ -41,26 +41,30 @@ services:
   backend:
     build:
       context: ./services/backend
-    ports:
-      - "8000:8000"
+    restart: unless-stopped
     env_file:
       - .env
     volumes:
       - ./data/papers:/data/papers:ro
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]
     environment:
+      - DATABASE_URL=${DATABASE_URL}
       - MCP_BASE_URL=${MCP_BASE_URL:-http://mcp:7000}
-      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000/}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
+      - COOKIE_SECURE=${COOKIE_SECURE:-true}
+      - COOKIE_SAMESITE=${COOKIE_SAMESITE:-lax}
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
       - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
       - STRIPE_PRICE_ID=${STRIPE_PRICE_ID}
-      - COOKIE_SECURE=${COOKIE_SECURE:-false}
-      - COOKIE_SAMESITE=${COOKIE_SAMESITE:-lax}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
       interval: 10s
       timeout: 5s
-      retries: 6
-      start_period: 20s
+      retries: 8
+      start_period: 25s
     depends_on:
       postgres:
         condition: service_healthy
@@ -70,6 +74,7 @@ services:
   mcp:
     build:
       context: ./services/mcp
+    restart: unless-stopped
     env_file:
       - .env
     environment:
@@ -79,55 +84,30 @@ services:
       - SMTP_PASSWORD=${SMTP_PASSWORD:-}
       - SMTP_FROM=${SMTP_FROM:-}
       - SMTP_USE_TLS=${SMTP_USE_TLS:-true}
-    ports:
-      - "7001:7000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7000/health', timeout=3)"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 10s
-
-  postgres:
-    image: pgvector/pgvector:pg16
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER:-postgres}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
-      - POSTGRES_DB=${POSTGRES_DB:-mh}
-    ports:
-      - "5433:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-mh}"]
       interval: 10s
       timeout: 5s
       retries: 8
       start_period: 10s
 
-  db-init:
-    image: postgres:16
-    profiles: ["dev"]
-    depends_on:
-      postgres:
-        condition: service_healthy
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      - DB_INIT_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-mh}
-      - POSTGRES_USER=${POSTGRES_USER:-postgres}
-      - POSTGRES_DB=${POSTGRES_DB:-mh}
-      - EMBEDDING_DIM=${EMBEDDING_DIM:-1536}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
     volumes:
-      - ./services/backend/sql:/sql:ro
-    command: >
-      bash -c "until pg_isready -h postgres -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\"; do sleep 1; done;
-      psql \"$$DB_INIT_URL\" -f /sql/create_users.sql;
-      psql \"$$DB_INIT_URL\" -f /sql/create_outbound_emails.sql;
-      psql \"$$DB_INIT_URL\" -f /sql/create_pending_actions.sql;
-      if psql \"$$DB_INIT_URL\" -tAc \"select to_regclass('public.chunks')\" | grep -q chunks; then
-        psql \"$$DB_INIT_URL\" -v target_dim=$$EMBEDDING_DIM -f /sql/alter_chunks_embedding_dim.sql;
-      else
-        echo 'chunks table not found, skipping embedding dimension init';
-      fi"
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
 volumes:
   pgdata:

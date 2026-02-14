@@ -1,15 +1,27 @@
 "use client";
 
+import AppShell from "../../../components/app-shell";
+import { Card, CardContent, CardHeader, CardTitle } from "../../../components/ui/card";
+
 export default function PremiumCancelPage() {
   return (
-    <main className="min-h-screen bg-slate-50 px-6 py-16 text-ink">
-      <div className="mx-auto max-w-xl space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h1 className="font-display text-2xl">Checkout canceled</h1>
-        <p>Your payment was canceled. You can try again anytime.</p>
-        <a className="text-sm font-semibold text-ink underline" href="/">
-          Back to chat
-        </a>
+    <AppShell title="Checkout canceled" subtitle="No charge was made. You can upgrade any time.">
+      <div className="mx-auto mt-8 w-full max-w-xl">
+        <Card>
+          <CardHeader>
+            <CardTitle>Checkout canceled</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p>Your payment was canceled. You can try again anytime.</p>
+            <a
+              className="inline-flex h-10 items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 dark:bg-white dark:text-gray-900"
+              href="/"
+            >
+              Back to chat
+            </a>
+          </CardContent>
+        </Card>
       </div>
-    </main>
+    </AppShell>
   );
 }

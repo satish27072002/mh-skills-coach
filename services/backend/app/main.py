@@ -8,6 +8,7 @@ import urllib.parse
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, AsyncIterator
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -48,7 +49,13 @@ from .llm.provider import (
 )
 from .mcp_client import mcp_therapist_search, probe_mcp_health
 from .models import StripeEvent, User
-from .safety import classify_intent, is_prescription_request, route_message, is_crisis
+from .safety import (
+    classify_intent,
+    contains_jailbreak_attempt,
+    is_prescription_request,
+    route_message,
+    is_crisis,
+)
 from .schemas import (
     BookingProposal,
     ChatRequest,
@@ -101,6 +108,7 @@ app.add_middleware(
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
+BOOKING_SESSION_COOKIE_NAME = "mh_booking_session"
 logger = logging.getLogger(__name__)
 UTC = ZoneInfo("UTC")
 _LAST_THERAPIST_LOCATION_BY_SESSION = LAST_THERAPIST_LOCATION_BY_SESSION
@@ -452,9 +460,15 @@ def status() -> dict[str, Any]:
     }
 
 
-def _set_cookie(response: Response, name: str, value: str) -> None:
+def _set_cookie(response: Response, name: str, value: str, request: Request | None = None) -> None:
     samesite = settings.cookie_samesite.lower()
     secure = settings.cookie_secure
+    # Dev over plain HTTP cannot round-trip Secure cookies. Keep prod secure by default.
+    if request is not None and settings.dev_mode:
+        forwarded_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+        request_is_https = request.url.scheme == "https" or forwarded_proto == "https"
+        if not request_is_https:
+            secure = False
     if samesite == "none" and not secure:
         logger.warning("COOKIE_SAMESITE=None requires COOKIE_SECURE=true; forcing secure")
         secure = True
@@ -471,7 +485,41 @@ def _get_user_from_cookie(db: Session, request: Request) -> User | None:
     user_id = request.cookies.get(settings.session_cookie_name)
     if not user_id:
         return None
-    return db.get(User, int(user_id))
+    try:
+        parsed_user_id = UUID(user_id)
+    except ValueError:
+        return None
+    return db.get(User, parsed_user_id)
+
+
+def _get_booking_actor_key(user: User | None, request: Request) -> str | None:
+    if user:
+        return str(user.id)
+    session_token = request.cookies.get(BOOKING_SESSION_COOKIE_NAME)
+    if not session_token:
+        return None
+    normalized = session_token.strip()
+    if not normalized:
+        return None
+    return f"anon:{normalized}"
+
+
+def _ensure_booking_actor_key(user: User | None, request: Request, response: Response) -> str:
+    existing = _get_booking_actor_key(user, request)
+    if existing:
+        return existing
+    token = secrets.token_urlsafe(24)
+    _set_cookie(response, BOOKING_SESSION_COOKIE_NAME, token, request=request)
+    return f"anon:{token}"
+
+
+def _parse_user_id(value: str | None) -> UUID | None:
+    if not value:
+        return None
+    try:
+        return UUID(value)
+    except ValueError:
+        return None
 
 
 def _build_router() -> ChatRouter:
@@ -559,7 +607,7 @@ def _verify_id_token(id_token: str, token_keys: list[str]) -> dict[str, Any]:
 
 
 @app.get("/auth/google/start")
-def auth_google_start() -> Response:
+def auth_google_start(request: Request) -> Response:
     if not settings.google_client_id:
         return JSONResponse(status_code=501, content={"error": "google oauth not configured"})
 
@@ -578,8 +626,8 @@ def auth_google_start() -> Response:
     )
 
     response = RedirectResponse(url=auth_url, status_code=302)
-    _set_cookie(response, "pkce_verifier", code_verifier)
-    _set_cookie(response, "oauth_state", state)
+    _set_cookie(response, "pkce_verifier", code_verifier, request=request)
+    _set_cookie(response, "oauth_state", state, request=request)
     return response
 
 
@@ -605,14 +653,19 @@ def auth_google_callback(request: Request, db: Session = Depends(get_db)) -> Res
         raise HTTPException(status_code=400, detail="missing pkce verifier")
 
     if not settings.google_client_secret or not settings.google_client_id:
-        user = db.execute(select(User).where(User.email == "demo@example.com")).scalar_one_or_none()
+        demo_sub = "dev-local-demo-user"
+        user = db.execute(select(User).where(User.google_sub == demo_sub)).scalar_one_or_none()
         if not user:
-            user = User(email="demo@example.com", name="Demo User")
+            user = User(
+                google_sub=demo_sub,
+                email="demo@example.com",
+                name="Demo User"
+            )
             db.add(user)
             db.commit()
             db.refresh(user)
         response = JSONResponse(content={"status": "stubbed"})
-        _set_cookie(response, settings.session_cookie_name, str(user.id))
+        _set_cookie(response, settings.session_cookie_name, str(user.id), request=request)
         return response
 
     try:
@@ -654,20 +707,28 @@ def auth_google_callback(request: Request, db: Session = Depends(get_db)) -> Res
             status_code=302
         )
     email = claims.get("email")
-    if not email:
-        raise HTTPException(status_code=400, detail="missing email")
+    google_sub = claims.get("sub")
+    if not google_sub:
+        raise HTTPException(status_code=400, detail="missing subject")
     name = claims.get("name") or claims.get("given_name") or "User"
 
-    user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+    user = db.execute(select(User).where(User.google_sub == google_sub)).scalar_one_or_none()
+    if not user and email:
+        user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+
     if not user:
-        user = User(email=email, name=name)
+        user = User(google_sub=google_sub, email=email, name=name)
         db.add(user)
-        db.commit()
-        db.refresh(user)
+    else:
+        user.google_sub = google_sub
+        user.email = email
+        user.name = name
+    db.commit()
+    db.refresh(user)
 
     redirect_url = f"{settings.frontend_url.rstrip('/')}/"
     response = RedirectResponse(url=redirect_url, status_code=302)
-    _set_cookie(response, settings.session_cookie_name, str(user.id))
+    _set_cookie(response, settings.session_cookie_name, str(user.id), request=request)
     response.delete_cookie("pkce_verifier")
     response.delete_cookie("oauth_state")
     return response
@@ -678,13 +739,21 @@ def get_me(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     user = _get_user_from_cookie(db, request)
     if not user:
         raise HTTPException(status_code=401, detail="not authenticated")
-    return {"id": user.id, "email": user.email, "name": user.name, "is_premium": user.is_premium}
+    return {
+        "id": str(user.id),
+        "google_sub": user.google_sub,
+        "email": user.email,
+        "name": user.name,
+        "is_premium": user.is_premium,
+        "premium_until": user.premium_until,
+    }
 
 
 @app.post("/logout")
 def logout() -> JSONResponse:
     response = JSONResponse(content={"status": "ok"})
     response.delete_cookie(settings.session_cookie_name)
+    response.delete_cookie(BOOKING_SESSION_COOKIE_NAME)
     return response
 
 
@@ -711,13 +780,26 @@ def therapists_search(
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(payload: ChatRequest, request: Request, db: Session = Depends(get_db)) -> ChatResponse:
+def chat(
+    payload: ChatRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> ChatResponse:
     message = payload.message.strip()
     user = _get_user_from_cookie(db, request)
+    if contains_jailbreak_attempt(message):
+        return ChatResponse(
+            coach_message=(
+                "I can’t follow attempts to bypass safety boundaries. "
+                "I can still help with safe coping support, therapist search, or appointment email drafting."
+            )
+        )
+    actor_key = _get_booking_actor_key(user, request)
     pending_action = None
     pending_expired = False
-    if user:
-        pending_action, pending_expired = load_pending_booking(db, str(user.id))
+    if actor_key:
+        pending_action, pending_expired = load_pending_booking(db, actor_key)
 
     therapist_agent = _build_therapist_agent()
     safety_gate = SafetyGate(therapist_agent=therapist_agent)
@@ -739,15 +821,26 @@ def chat(payload: ChatRequest, request: Request, db: Session = Depends(get_db)) 
             ),
         )
     )
+    logger.info(
+        "chat_route_decision route=%s has_pending_booking=%s has_pending_location=%s user_id=%s actor_key=%s",
+        route,
+        bool(pending_action),
+        therapist_agent.has_pending_location_request(user=user, request=request),
+        str(user.id) if user else None,
+        actor_key,
+    )
 
     if route == "THERAPIST_SEARCH":
         return therapist_agent.handle(user=user, request=request, message=message)
 
     if route == "BOOKING_EMAIL":
+        if not actor_key:
+            actor_key = _ensure_booking_actor_key(user, request, response)
         booking_agent = _build_booking_agent()
         booking_response = booking_agent.handle(
             db=db,
             user=user,
+            actor_key=actor_key,
             message=message,
             pending_action=pending_action,
             pending_expired=pending_expired,
@@ -832,10 +925,14 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)) -> dic
         session = event.get("data", {}).get("object", {})
         metadata = session.get("metadata", {})
         user_id = metadata.get("user_id") or session.get("client_reference_id")
-        if user_id:
-            user = db.get(User, int(user_id))
+        parsed_user_id = _parse_user_id(user_id)
+        if parsed_user_id:
+            user = db.get(User, parsed_user_id)
             if user:
                 user.is_premium = True
+                stripe_customer_id = session.get("customer")
+                if isinstance(stripe_customer_id, str) and stripe_customer_id.strip():
+                    user.stripe_customer_id = stripe_customer_id.strip()
 
     db.commit()
     return {"status": "processed"}

@@ -1,12 +1,8 @@
 import { NextResponse } from "next/server";
 
-import { getBackendBaseUrl } from "../../../_lib/backend";
+import { getBackendBaseUrl, getSetCookieHeaders } from "../../../_lib/backend";
 
 export const runtime = "nodejs";
-
-type HeadersWithSetCookie = Headers & {
-  getSetCookie?: () => string[];
-};
 
 export async function GET() {
   try {
@@ -21,15 +17,8 @@ export async function GET() {
     }
 
     const response = NextResponse.redirect(location, { status: backendRes.status });
-    const setCookies = (backendRes.headers as HeadersWithSetCookie).getSetCookie?.() ?? [];
-    for (const setCookie of setCookies) {
+    for (const setCookie of getSetCookieHeaders(backendRes.headers)) {
       response.headers.append("set-cookie", setCookie);
-    }
-    if (setCookies.length === 0) {
-      const setCookie = backendRes.headers.get("set-cookie");
-      if (setCookie) {
-        response.headers.append("set-cookie", setCookie);
-      }
     }
     return response;
   } catch {

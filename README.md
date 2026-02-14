@@ -122,11 +122,41 @@ docker compose up -d --build
 docker compose exec backend python -m app.ingest --path /data/papers --reset
 ```
 
+## Deployment (Azure VM)
+1. Prepare production environment values:
+```bash
+cp .env.prod.example .env
+```
+2. Edit `.env` with real secrets (OAuth, Stripe, SMTP, OpenAI) and keep:
+- `FRONTEND_URL=https://mh-skills-coach.francecentral.cloudapp.azure.com`
+- `APP_BASE_URL=https://mh-skills-coach.francecentral.cloudapp.azure.com`
+- `GOOGLE_REDIRECT_URI=https://mh-skills-coach.francecentral.cloudapp.azure.com/auth/google/callback`
+- `NEXT_PUBLIC_API_BASE_URL=/api`
+3. Deploy on VM:
+```bash
+./scripts/deploy_vm.sh
+```
+Equivalent command:
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+```
+Production ingress files:
+- `docker-compose.prod.yml`
+- `Caddyfile.prod`
+Proxy rule:
+- public `/api/*` is stripped before forwarding to backend routes (for example, `/api/health` -> `/health`).
+4. Validate:
+- `https://mh-skills-coach.francecentral.cloudapp.azure.com/`
+- `https://mh-skills-coach.francecentral.cloudapp.azure.com/status`
+- `https://mh-skills-coach.francecentral.cloudapp.azure.com/api/health`
+- Stripe webhook endpoint: `https://mh-skills-coach.francecentral.cloudapp.azure.com/api/payments/webhook`
+
 ## Additional Docs
 - `SPEC.md`
 - `SAFETY.md`
 - `TODO.md`
 - `docs/DEPLOYMENT.md`
+- `docs/DEPLOYMENT_AZURE.md`
 
 ## Secrets & Environment
 - Copy `.env.example` to `.env` and configure values for your environment.

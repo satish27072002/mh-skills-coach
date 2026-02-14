@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import logging
 from datetime import datetime
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
@@ -23,9 +24,12 @@ from app.booking import (
 )
 from app.email_orchestrator import EmailSendPayload
 from app.models import PendingAction, User
+from app.prompts import BOOKING_EMAIL_MASTER_PROMPT
 from app.schemas import BookingProposal, ChatResponse
 
 UTC = ZoneInfo("UTC")
+logger = logging.getLogger(__name__)
+SYSTEM_PROMPT = BOOKING_EMAIL_MASTER_PROMPT
 
 
 def is_confirmation_only_message(message: str) -> bool:
@@ -43,6 +47,21 @@ def _pending_payload_complete(payload: dict[str, str | None]) -> bool:
         and payload.get("subject")
         and payload.get("body")
     )
+
+
+def _missing_payload_fields(payload: dict[str, Any]) -> list[str]:
+    missing: list[str] = []
+    if not payload.get("therapist_email"):
+        missing.append("therapist_email")
+    if not payload.get("requested_datetime_iso"):
+        missing.append("requested_datetime_iso")
+    return missing
+
+
+def _stamp_payload_state(payload: dict[str, Any]) -> dict[str, Any]:
+    payload["timezone"] = "Europe/Stockholm"
+    payload["missing_fields"] = _missing_payload_fields(payload)
+    return payload
 
 
 def _requested_time_display(requested_datetime_iso: str) -> str:
@@ -100,6 +119,7 @@ class BookingEmailAgent:
         *,
         db: Session,
         user: User | None,
+        actor_key: str,
         message: str,
         pending_action: PendingAction | None,
         pending_expired: bool,
@@ -108,6 +128,7 @@ class BookingEmailAgent:
             pending_payload = parse_pending_payload(pending_action)
             if is_negative(message):
                 clear_pending_booking(db, pending_action)
+                logger.info("booking_pending_cancelled actor_key=%s", actor_key)
                 return ChatResponse(
                     coach_message="Okay, I cancelled the pending booking email request.",
                     requires_confirmation=False,
@@ -123,10 +144,12 @@ class BookingEmailAgent:
                     reply_to=pending_payload.get("reply_to"),
                 )
                 try:
-                    self._send_email_fn(str(user.id), email_payload)
+                    self._send_email_fn(actor_key, email_payload)
                     coach_message = "Email sent successfully. I have cleared the pending booking request."
+                    logger.info("booking_email_sent actor_key=%s to=%s", actor_key, email_payload.to)
                 except HTTPException as exc:
                     coach_message = f"I could not send the email: {exc.detail}"
+                    logger.info("booking_email_failed actor_key=%s reason=%s", actor_key, exc.detail)
                 clear_pending_booking(db, pending_action)
                 return ChatResponse(
                     coach_message=coach_message,
@@ -134,16 +157,22 @@ class BookingEmailAgent:
                 )
 
             update = extract_booking_data(message)
+            requested_datetime_iso = (
+                update.requested_datetime.astimezone(STOCKHOLM_TZ).isoformat()
+                if update.requested_datetime
+                else None
+            )
             changed = False
             if not pending_payload.get("therapist_email") and update.therapist_email:
                 pending_payload["therapist_email"] = update.therapist_email
                 changed = True
-            if not pending_payload.get("requested_datetime_iso") and update.requested_datetime:
-                pending_payload["requested_datetime_iso"] = update.requested_datetime.isoformat()
+            if not pending_payload.get("requested_datetime_iso") and requested_datetime_iso:
+                pending_payload["requested_datetime_iso"] = requested_datetime_iso
                 changed = True
 
             if _pending_payload_complete(pending_payload):
                 proposal = _booking_proposal_from_payload(pending_payload, pending_action.expires_at)
+                logger.info("booking_proposal_ready actor_key=%s to=%s", actor_key, proposal.therapist_email)
                 return ChatResponse(
                     coach_message=(
                         f"Please confirm sending this request to {proposal.therapist_email} for "
@@ -159,12 +188,16 @@ class BookingEmailAgent:
                     user=user,
                     therapist_email=pending_payload["therapist_email"] or "",
                     requested_datetime=dt,
+                    sender_name=pending_payload.get("sender_name"),
+                    sender_email=pending_payload.get("reply_to"),
                 )
-                save_pending_booking(db, str(user.id), complete_payload)
-                refreshed_action, _ = load_pending_booking(db, str(user.id))
+                save_pending_booking(db, actor_key, _stamp_payload_state(complete_payload))
+                refreshed_action, _ = load_pending_booking(db, actor_key)
                 if not refreshed_action:
                     raise HTTPException(status_code=500, detail="failed to load pending booking")
-                proposal = _booking_proposal_from_payload(complete_payload, refreshed_action.expires_at)
+                refreshed_payload = parse_pending_payload(refreshed_action)
+                proposal = _booking_proposal_from_payload(refreshed_payload, refreshed_action.expires_at)
+                logger.info("booking_proposal_created actor_key=%s to=%s", actor_key, proposal.therapist_email)
                 return ChatResponse(
                     coach_message=(
                         f"I prepared the email to {proposal.therapist_email} for {proposal.requested_time}. "
@@ -175,13 +208,19 @@ class BookingEmailAgent:
                 )
 
             if changed:
-                save_pending_booking(db, str(user.id), pending_payload)
+                save_pending_booking(db, actor_key, _stamp_payload_state(pending_payload))
+                logger.info(
+                    "booking_pending_updated actor_key=%s missing=%s",
+                    actor_key,
+                    ",".join(_missing_payload_fields(pending_payload)),
+                )
 
             return ChatResponse(
                 coach_message=_missing_booking_fields_message(pending_payload, clarification=update.clarification)
             )
 
         if pending_expired and (is_affirmative(message) or is_negative(message)):
+            logger.info("booking_pending_expired actor_key=%s", actor_key)
             return ChatResponse(
                 coach_message=(
                     f"Your pending booking request expired after {BOOKING_TTL_MINUTES} minutes. "
@@ -199,18 +238,14 @@ class BookingEmailAgent:
         if not is_booking_intent(message):
             return None
 
-        if not user:
-            return ChatResponse(
-                coach_message="Please sign in before I can prepare and send booking emails."
-            )
-
         extracted = extract_booking_data(message)
-        booking_payload: dict[str, str | None] = {
+        booking_payload: dict[str, Any] = {
             "therapist_email": extracted.therapist_email,
             "requested_datetime_iso": extracted.requested_datetime.isoformat() if extracted.requested_datetime else None,
             "subject": None,
             "body": None,
-            "reply_to": user.email,
+            "reply_to": user.email if user and user.email else None,
+            "sender_name": extracted.sender_name or (user.name if user and user.name else None),
         }
 
         if extracted.therapist_email and extracted.requested_datetime:
@@ -218,9 +253,11 @@ class BookingEmailAgent:
                 user=user,
                 therapist_email=extracted.therapist_email,
                 requested_datetime=extracted.requested_datetime,
+                sender_name=extracted.sender_name,
             )
-            pending = save_pending_booking(db, str(user.id), booking_payload)
+            pending = save_pending_booking(db, actor_key, _stamp_payload_state(booking_payload))
             proposal = _booking_proposal_from_payload(booking_payload, pending.expires_at)
+            logger.info("booking_proposal_created actor_key=%s to=%s", actor_key, proposal.therapist_email)
             return ChatResponse(
                 coach_message=(
                     f"I prepared an appointment email to {proposal.therapist_email} for "
@@ -230,7 +267,12 @@ class BookingEmailAgent:
                 requires_confirmation=True,
             )
 
-        save_pending_booking(db, str(user.id), booking_payload)
+        save_pending_booking(db, actor_key, _stamp_payload_state(booking_payload))
+        logger.info(
+            "booking_pending_created actor_key=%s missing=%s",
+            actor_key,
+            ",".join(_missing_payload_fields(booking_payload)),
+        )
         return ChatResponse(
             coach_message=_missing_booking_fields_message(booking_payload, clarification=extracted.clarification),
             requires_confirmation=False,
