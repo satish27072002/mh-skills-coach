@@ -473,20 +473,6 @@ docker compose -f docker-compose.prod.yml up -d --build
 curl https://mh-skills-coach.francecentral.cloudapp.azure.com/status
 ```
 
-
----
-
-
-
-## 📸 Screenshots
-
-> **Note:** Add screenshots here showing:
-> - Chat interface with coaching response
-> - Therapist search results
-> - Booking email proposal with confirmation
-> - Crisis response with emergency resources
-> - Premium upgrade flow
-
 ---
 
 ## 🗺 Roadmap
