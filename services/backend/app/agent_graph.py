@@ -14,6 +14,7 @@ from .schemas import ChatResponse, Resource
 
 class AgentState(TypedDict, total=False):
     user_message: str
+    conversation_history: list[dict[str, str]]  # prior turns for context continuity
     risk_level: str
     retrieved_chunks: list[dict[str, Any]]
     response_json: dict[str, Any]
@@ -59,6 +60,8 @@ def retrieve_context(state: AgentState) -> AgentState:
 def llm_response(state: AgentState) -> AgentState:
     message = state.get("user_message", "")
     chunks = state.get("retrieved_chunks", [])
+    history = state.get("conversation_history") or []
+
     context_blocks: list[str] = []
     for idx, chunk in enumerate(chunks, start=1):
         text = (chunk.get("text") or "").strip()
@@ -77,9 +80,14 @@ def llm_response(state: AgentState) -> AgentState:
             f"User message:\n{message}"
         )
 
+    # Build messages list: prior conversation history + current user message
+    # This gives the LLM full context continuity across turns.
+    messages: list[dict[str, str]] = list(history)
+    messages.append({"role": "user", "content": user_prompt})
+
     try:
         content = generate_chat(
-            messages=[{"role": "user", "content": user_prompt}],
+            messages=messages,
             system_prompt=COACH_MASTER_PROMPT,
             timeout=180.0,
             keep_alive="10m",
@@ -134,9 +142,13 @@ def build_graph(
 
 def run_agent(
     message: str,
+    history: list[dict[str, str]] | None = None,
     retrieve_fn: Callable[[AgentState], AgentState] | None = None,
     llm_fn: Callable[[AgentState], AgentState] | None = None
 ) -> dict[str, Any]:
     graph = build_graph(retrieve_fn=retrieve_fn, llm_fn=llm_fn)
-    state = graph.invoke({"user_message": message})
+    state = graph.invoke({
+        "user_message": message,
+        "conversation_history": history or [],
+    })
     return state.get("response_json", {})

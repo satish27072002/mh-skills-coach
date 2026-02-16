@@ -11,6 +11,10 @@ from typing import Any, AsyncIterator
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+# Monitoring & security — must be imported before first use
+from .monitoring.logger import configure_logging, get_logger, log_event, new_correlation_id, set_correlation_id, Timer
+from .security.rate_limiter import RateLimiter, RateLimitExceeded
+
 import httpx
 import stripe
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -53,6 +57,9 @@ from .safety import (
     classify_intent,
     contains_jailbreak_attempt,
     is_prescription_request,
+    is_emotional_state,
+    emotional_state_coach_response,
+    scope_check,
     route_message,
     is_crisis,
 )
@@ -69,6 +76,16 @@ from .schemas import (
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    import os
+    # Configure LangSmith tracing if API key is present
+    if settings.langsmith_api_key:
+        os.environ["LANGSMITH_API_KEY"] = settings.langsmith_api_key
+        os.environ["LANGCHAIN_TRACING_V2"] = settings.langchain_tracing_v2
+        os.environ["LANGCHAIN_PROJECT"] = settings.langchain_project
+        logger.info("LangSmith tracing enabled for project: %s", settings.langchain_project)
+    else:
+        logger.info("LangSmith tracing disabled (no LANGSMITH_API_KEY)")
+
     try:
         validate_provider_configuration()
         get_active_embedding_dim()
@@ -109,9 +126,65 @@ app.add_middleware(
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 BOOKING_SESSION_COOKIE_NAME = "mh_booking_session"
-logger = logging.getLogger(__name__)
+
+# Configure structured logging at module load time
+configure_logging(level=settings.log_level, fmt=settings.log_format)
+logger = get_logger(__name__)
+
 UTC = ZoneInfo("UTC")
 _LAST_THERAPIST_LOCATION_BY_SESSION = LAST_THERAPIST_LOCATION_BY_SESSION
+
+# ---------------------------------------------------------------------------
+# Rate limiter — shared across requests (in-process, thread-safe)
+# ---------------------------------------------------------------------------
+_rate_limiter = RateLimiter(
+    max_requests=settings.rate_limit_chat_requests,
+    window_seconds=settings.rate_limit_window_seconds,
+)
+
+# ---------------------------------------------------------------------------
+# Conversation history store — keyed by session ID
+# Stores list of {"role": "user"/"assistant", "content": "..."} dicts
+# Capped at settings.conversation_history_max_turns * 2 messages
+# ---------------------------------------------------------------------------
+_conversation_store: dict[str, list[dict[str, str]]] = {}
+
+
+def _get_session_key(user: Any, request: Any) -> str:
+    """Build a stable session key from user ID or session cookie."""
+    if user and hasattr(user, "id"):
+        return f"user:{user.id}"
+    session_cookie = request.cookies.get(settings.session_cookie_name)
+    if session_cookie:
+        return f"session:{session_cookie}"
+    # Fallback to client IP
+    client_host = getattr(request.client, "host", "unknown") if request.client else "unknown"
+    return f"ip:{client_host}"
+
+
+def _load_history(session_key: str) -> list[dict[str, str]]:
+    """Load conversation history for a session."""
+    return list(_conversation_store.get(session_key, []))
+
+
+def _save_history(session_key: str, history: list[dict[str, str]]) -> None:
+    """Save conversation history, capping at max turns."""
+    max_messages = settings.conversation_history_max_turns * 2  # user + assistant per turn
+    if len(history) > max_messages:
+        history = history[-max_messages:]
+    _conversation_store[session_key] = history
+
+
+def _append_to_history(
+    session_key: str,
+    user_message: str,
+    assistant_message: str,
+) -> None:
+    """Append a user+assistant exchange to conversation history."""
+    history = _load_history(session_key)
+    history.append({"role": "user", "content": user_message})
+    history.append({"role": "assistant", "content": assistant_message})
+    _save_history(session_key, history)
 
 
 def _extract_location(message: str) -> str | None:
@@ -786,15 +859,56 @@ def chat(
     response: Response,
     db: Session = Depends(get_db),
 ) -> ChatResponse:
+    # --- Correlation ID for this request ---
+    correlation_id = new_correlation_id()
+    set_correlation_id(correlation_id)
+
     message = payload.message.strip()
     user = _get_user_from_cookie(db, request)
+    session_key = _get_session_key(user, request)
+
+    # --- Rate limiting ---
+    client_key = (
+        request.cookies.get(settings.session_cookie_name)
+        or (request.client.host if request.client else "unknown")
+    )
+    try:
+        _rate_limiter.check(client_key)
+    except RateLimitExceeded:
+        log_event("rate_limit_exceeded", client_key=client_key, correlation_id=correlation_id)
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests. Please wait a moment before sending another message."
+        )
+
+    # --- Jailbreak / scope guardrail ---
     if contains_jailbreak_attempt(message):
-        return ChatResponse(
+        log_event("safety_trigger", trigger_type="jailbreak", correlation_id=correlation_id)
+        jailbreak_response = ChatResponse(
             coach_message=(
-                "I can’t follow attempts to bypass safety boundaries. "
-                "I can still help with safe coping support, therapist search, or appointment email drafting."
+                "I can't follow attempts to bypass safety boundaries. "
+                "I'm here to help with mental health coping skills, finding therapists, "
+                "or booking appointments — nothing outside that scope."
             )
         )
+        _append_to_history(session_key, message, jailbreak_response.coach_message or "")
+        return jailbreak_response
+
+    if not scope_check(message):
+        log_event("safety_trigger", trigger_type="out_of_scope", correlation_id=correlation_id)
+        out_of_scope_response = ChatResponse(
+            coach_message=(
+                "I'm here to help with mental health coping skills, finding therapists, "
+                "or booking appointments. I'm not able to help with that — "
+                "is there something in those areas I can support you with?"
+            )
+        )
+        _append_to_history(session_key, message, out_of_scope_response.coach_message or "")
+        return out_of_scope_response
+
+    # --- Load conversation history for context ---
+    history = _load_history(session_key)
+
     actor_key = _get_booking_actor_key(user, request)
     pending_action = None
     pending_expired = False
@@ -805,10 +919,22 @@ def chat(
     safety_gate = SafetyGate(therapist_agent=therapist_agent)
     safety_response = safety_gate.handle(user=user, request=request, message=message)
     if safety_response:
+        log_event("safety_trigger", trigger_type="safety_gate", correlation_id=correlation_id)
+        _append_to_history(session_key, message, safety_response.coach_message or "")
         return safety_response
 
+    # --- Emotional state check — route to COACH with coping exercises ---
+    if is_emotional_state(message) and not is_crisis(message):
+        log_event("agent_routing", route="COACH_EMOTIONAL", correlation_id=correlation_id)
+        emotional_response = emotional_state_coach_response(message)
+        _append_to_history(session_key, message, emotional_response.coach_message or "")
+        return emotional_response
+
     if is_prescription_request(message):
-        return route_message(message)
+        log_event("safety_trigger", trigger_type="prescription", correlation_id=correlation_id)
+        prescription_response = route_message(message)
+        _append_to_history(session_key, message, prescription_response.coach_message or "")
+        return prescription_response
 
     router = _build_router()
     route = router.route(
@@ -821,17 +947,19 @@ def chat(
             ),
         )
     )
-    logger.info(
-        "chat_route_decision route=%s has_pending_booking=%s has_pending_location=%s user_id=%s actor_key=%s",
-        route,
-        bool(pending_action),
-        therapist_agent.has_pending_location_request(user=user, request=request),
-        str(user.id) if user else None,
-        actor_key,
+    log_event(
+        "agent_routing",
+        route=route,
+        has_pending_booking=bool(pending_action),
+        has_pending_location=therapist_agent.has_pending_location_request(user=user, request=request),
+        user_id=str(user.id) if user else None,
+        correlation_id=correlation_id,
     )
 
     if route == "THERAPIST_SEARCH":
-        return therapist_agent.handle(user=user, request=request, message=message)
+        therapist_response = therapist_agent.handle(user=user, request=request, message=message)
+        _append_to_history(session_key, message, therapist_response.coach_message or "")
+        return therapist_response
 
     if route == "BOOKING_EMAIL":
         if not actor_key:
@@ -846,10 +974,17 @@ def chat(
             pending_expired=pending_expired,
         )
         if booking_response:
+            _append_to_history(session_key, message, booking_response.coach_message or "")
             return booking_response
 
-    response_json = run_agent(message)
-    return ChatResponse(**response_json)
+    # --- COACH: pass conversation history for context continuity ---
+    with Timer() as t:
+        response_json = run_agent(message, history=history)
+    log_event("llm_call", route="COACH", duration_ms=round(t.elapsed_ms), correlation_id=correlation_id)
+
+    final_response = ChatResponse(**response_json)
+    _append_to_history(session_key, message, final_response.coach_message or "")
+    return final_response
 
 
 @app.post("/payments/create-checkout-session", response_model=CheckoutSessionResponse)

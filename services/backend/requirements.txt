@@ -13,3 +13,7 @@ google-auth==2.33.0
 requests==2.32.3
 langgraph==0.2.39
 pypdf==4.2.0
+# Week 1 — Observability
+langsmith>=0.1.0
+# Week 2 — Resilience
+tenacity>=8.2.0
