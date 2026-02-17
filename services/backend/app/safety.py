@@ -202,7 +202,7 @@ MEDICAL_ADVICE_OUTPUT_KEYWORDS = [
 # JAILBREAK patterns — expanded with 20+ patterns
 # ---------------------------------------------------------------------------
 JAILBREAK_PATTERNS = [
-    r"\bignore (all|any|previous|prior) (instructions|rules|policy|guidelines)\b",
+    r"\bignore\b.{0,30}\b(instructions|rules|policy|guidelines)\b",
     r"\boverride (the )?(system|safety|policy|rules|guidelines)\b",
     r"\breveal (the )?(system prompt|prompt|hidden prompt|instructions)\b",
     r"\bjailbreak\b",
@@ -270,8 +270,23 @@ def is_crisis(message: str) -> bool:
 
 def is_emotional_state(message: str) -> bool:
     """True for everyday emotional states (anxious, stressed, sad, etc.)
-    that should route to COACH for coping exercises — not crisis escalation."""
-    return _contains_any(message, EMOTIONAL_STATE_KEYWORDS)
+    that should route to COACH for coping exercises — not crisis escalation.
+
+    Returns False if the message is primarily a therapist search or booking
+    request (e.g. 'find therapists near Stockholm for anxiety'), so those
+    route correctly even if they contain an emotional keyword.
+    """
+    if not _contains_any(message, EMOTIONAL_STATE_KEYWORDS):
+        return False
+    # Don't intercept therapist search / booking messages
+    lower = message.lower()
+    therapist_intent = any(w in lower for w in [
+        "therapist", "clinic", "counselor", "counsellor", "psychiatrist",
+        "find", "near", "book", "appointment", "email", "schedule",
+    ])
+    if therapist_intent:
+        return False
+    return True
 
 
 def scope_check(message: str) -> bool:
