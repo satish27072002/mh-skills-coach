@@ -15,3 +15,21 @@ def _configure_test_db():
     config.settings.database_url = TEST_DATABASE_URL
     db.reset_engine(TEST_DATABASE_URL)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """Reset the rate limiter before every test so tests don't share state."""
+    from app.main import _rate_limiter
+    _rate_limiter._store.clear()
+    yield
+    _rate_limiter._store.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_conversation_store():
+    """Reset conversation history before every test."""
+    from app.main import _conversation_store
+    _conversation_store.clear()
+    yield
+    _conversation_store.clear()

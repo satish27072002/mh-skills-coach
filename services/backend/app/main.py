@@ -881,7 +881,23 @@ def chat(
             detail="Too many requests. Please wait a moment before sending another message."
         )
 
-    # --- Jailbreak / scope guardrail ---
+    # --- Safety gate FIRST (crisis / jailbreak via SafetyGate) ---
+    # Must run before scope_check so that crisis messages are never blocked as out-of-scope.
+    actor_key = _get_booking_actor_key(user, request)
+    pending_action = None
+    pending_expired = False
+    if actor_key:
+        pending_action, pending_expired = load_pending_booking(db, actor_key)
+
+    therapist_agent = _build_therapist_agent()
+    safety_gate = SafetyGate(therapist_agent=therapist_agent)
+    safety_response = safety_gate.handle(user=user, request=request, message=message)
+    if safety_response:
+        log_event("safety_trigger", trigger_type="safety_gate", correlation_id=correlation_id)
+        _append_to_history(session_key, message, safety_response.coach_message or "")
+        return safety_response
+
+    # --- Jailbreak guardrail ---
     if contains_jailbreak_attempt(message):
         log_event("safety_trigger", trigger_type="jailbreak", correlation_id=correlation_id)
         jailbreak_response = ChatResponse(
@@ -894,6 +910,7 @@ def chat(
         _append_to_history(session_key, message, jailbreak_response.coach_message or "")
         return jailbreak_response
 
+    # --- Scope check — only after safety/crisis is already handled ---
     if not scope_check(message):
         log_event("safety_trigger", trigger_type="out_of_scope", correlation_id=correlation_id)
         out_of_scope_response = ChatResponse(
@@ -908,20 +925,6 @@ def chat(
 
     # --- Load conversation history for context ---
     history = _load_history(session_key)
-
-    actor_key = _get_booking_actor_key(user, request)
-    pending_action = None
-    pending_expired = False
-    if actor_key:
-        pending_action, pending_expired = load_pending_booking(db, actor_key)
-
-    therapist_agent = _build_therapist_agent()
-    safety_gate = SafetyGate(therapist_agent=therapist_agent)
-    safety_response = safety_gate.handle(user=user, request=request, message=message)
-    if safety_response:
-        log_event("safety_trigger", trigger_type="safety_gate", correlation_id=correlation_id)
-        _append_to_history(session_key, message, safety_response.coach_message or "")
-        return safety_response
 
     # --- Emotional state check — route to COACH with coping exercises ---
     if is_emotional_state(message) and not is_crisis(message):
