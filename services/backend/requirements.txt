@@ -20,3 +20,4 @@ streamlit>=1.35.0
 pandas>=2.0.0
 # Week 2 — Resilience
 tenacity>=8.2.0
+openai>=1.0.0
