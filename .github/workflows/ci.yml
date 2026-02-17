@@ -7,7 +7,9 @@ on:
     branches: [main]
 
 jobs:
-  backend-tests:
+  # ── Job 1: Safety tests — must pass 100% ─────────────────────────────────
+  safety-tests:
+    name: Safety tests (100% required)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -16,9 +18,11 @@ jobs:
       DATABASE_URL: sqlite+pysqlite:///./test.db
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - name: Cache pip
         uses: actions/cache@v4
         with:
@@ -26,7 +30,113 @@ jobs:
           key: ${{ runner.os }}-pip-${{ hashFiles('services/backend/requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
+
       - name: Install dependencies
         run: python -m pip install --upgrade pip && pip install -r requirements.txt
-      - name: Run tests
-        run: python -m pytest -q
+
+      - name: Run safety tests (crisis guardrail — 100% pass rate enforced)
+        run: |
+          python -m pytest tests/test_crisis_guardrail.py -v \
+            --tb=short \
+            --junit-xml=reports/safety-results.xml
+
+      - name: Upload safety test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: safety-test-report
+          path: services/backend/reports/safety-results.xml
+
+  # ── Job 2: Full test suite with coverage ─────────────────────────────────
+  backend-tests:
+    name: Full test suite + coverage
+    runs-on: ubuntu-latest
+    needs: safety-tests
+    defaults:
+      run:
+        working-directory: services/backend
+    env:
+      DATABASE_URL: sqlite+pysqlite:///./test.db
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('services/backend/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Run all tests with coverage
+        run: |
+          python -m pytest -q \
+            --tb=short \
+            --cov=app \
+            --cov-report=term-missing \
+            --cov-report=xml:reports/coverage.xml \
+            --cov-fail-under=60 \
+            --junit-xml=reports/test-results.xml
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: services/backend/reports/coverage.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: services/backend/reports/test-results.xml
+
+  # ── Job 3: Routing accuracy gate (≥90% required) ─────────────────────────
+  routing-accuracy:
+    name: Routing accuracy (≥90% required)
+    runs-on: ubuntu-latest
+    needs: safety-tests
+    defaults:
+      run:
+        working-directory: services/backend
+    env:
+      DATABASE_URL: sqlite+pysqlite:///./test.db
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('services/backend/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Run routing accuracy tests (≥90% threshold enforced)
+        run: |
+          python -m pytest tests/test_routing_accuracy.py -v \
+            --tb=short \
+            -s \
+            --junit-xml=reports/routing-results.xml
+
+      - name: Upload routing test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: routing-test-report
+          path: services/backend/reports/routing-results.xml
