@@ -36,6 +36,7 @@ jobs:
 
       - name: Run safety tests (crisis guardrail — 100% pass rate enforced)
         run: |
+          mkdir -p reports
           python -m pytest tests/test_crisis_guardrail.py -v \
             --tb=short \
             --junit-xml=reports/safety-results.xml
@@ -77,6 +78,7 @@ jobs:
 
       - name: Run all tests with coverage
         run: |
+          mkdir -p reports
           python -m pytest -q \
             --tb=short \
             --cov=app \
@@ -129,6 +131,7 @@ jobs:
 
       - name: Run routing accuracy tests (≥90% threshold enforced)
         run: |
+          mkdir -p reports
           python -m pytest tests/test_routing_accuracy.py -v \
             --tb=short \
             -s \
