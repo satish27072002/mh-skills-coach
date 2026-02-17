@@ -38,6 +38,11 @@ CRISIS_KEYWORDS = [
     "better off dead",
     "take my own life",
     "taking my own life",
+    "thinking about ending it",
+    "thinking about suicide",
+    "can't see a reason to keep going",
+    "cannot see a reason to keep going",
+    "no reason to keep going",
 ]
 
 # Stable order, no duplicates
