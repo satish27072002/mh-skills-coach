@@ -1,14 +1,56 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from typing import Any, Protocol
 
 import httpx
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+    before_sleep_log,
+)
 
 from ..config import settings
 
+logger = logging.getLogger(__name__)
 
 OPENAI_BASE_URL = "https://api.openai.com/v1"
+
+# ---------------------------------------------------------------------------
+# LangSmith @traceable — imported lazily so the app still works when
+# langsmith is not installed or LANGSMITH_API_KEY is not set.
+# ---------------------------------------------------------------------------
+try:
+    from langsmith import traceable as _langsmith_traceable  # type: ignore[import]
+    _LANGSMITH_AVAILABLE = True
+except ImportError:
+    _LANGSMITH_AVAILABLE = False
+
+    def _langsmith_traceable(**_kwargs: Any):  # type: ignore[misc]
+        """No-op decorator when langsmith is not installed."""
+        def decorator(fn: Any) -> Any:
+            return fn
+        return decorator
+
+
+def traceable(name: str):
+    """Wrap a function with LangSmith tracing if available and configured."""
+    if _LANGSMITH_AVAILABLE and settings.langsmith_api_key:
+        return _langsmith_traceable(name=name, run_type="llm")
+    return _langsmith_traceable(**{}) if _LANGSMITH_AVAILABLE else (lambda fn: fn)
+
+
+# ---------------------------------------------------------------------------
+# Fallback message returned to the user when the LLM is unavailable.
+# ---------------------------------------------------------------------------
+FALLBACK_COACH_MESSAGE = (
+    "I'm sorry, I'm having trouble connecting right now. "
+    "Please try again in a moment. If you need immediate support, "
+    "you can call 1177 (healthcare advice) or 112 (emergency) in Sweden."
+)
 
 
 class ProviderError(RuntimeError):
@@ -145,7 +187,8 @@ class OpenAIProvider:
         system_prompt: str | None = None,
         **kwargs: Any
     ) -> str:
-        timeout = kwargs.pop("timeout", 30.0)
+        # Use the configured timeout (default 30s) — never hang forever.
+        timeout = kwargs.pop("timeout", settings.llm_timeout_seconds)
         payload_messages = list(messages)
         if system_prompt:
             payload_messages.insert(0, {"role": "system", "content": system_prompt})
@@ -190,7 +233,7 @@ class OpenAIProvider:
                 f"{self.base_url}/embeddings",
                 json=payload,
                 headers=self._headers(),
-                timeout=30.0
+                timeout=settings.llm_timeout_seconds
             )
             response.raise_for_status()
         except httpx.TimeoutException as exc:
@@ -299,12 +342,64 @@ def get_embed_provider() -> LlmEmbeddingProvider:
     )
 
 
+# ---------------------------------------------------------------------------
+# Public generate_chat — @traceable + tenacity retries + fallback response
+# ---------------------------------------------------------------------------
+
+@retry(
+    retry=retry_if_exception_type(ProviderError),
+    stop=stop_after_attempt(settings.llm_max_retries),
+    wait=wait_exponential(multiplier=1, min=2, max=8),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
+def _generate_chat_with_retry(
+    messages: list[dict[str, str]],
+    system_prompt: str | None = None,
+    **kwargs: Any
+) -> str:
+    """Inner function: calls the LLM provider with tenacity retries.
+    Retries up to llm_max_retries times with 2s→4s→8s exponential backoff.
+    """
+    return get_llm_provider().generate_chat(
+        messages=messages,
+        system_prompt=system_prompt,
+        **kwargs
+    )
+
+
+# Apply LangSmith tracing on top of the retry wrapper
+_traced_generate_chat = _langsmith_traceable(
+    name="generate_chat", run_type="llm"
+)(_generate_chat_with_retry) if _LANGSMITH_AVAILABLE else _generate_chat_with_retry
+
+
 def generate_chat(
     messages: list[dict[str, str]],
     system_prompt: str | None = None,
     **kwargs: Any
 ) -> str:
-    return get_llm_provider().generate_chat(messages=messages, system_prompt=system_prompt, **kwargs)
+    """Public entrypoint for all LLM chat calls.
+
+    Features:
+    - LangSmith @traceable (when LANGSMITH_API_KEY is set)
+    - Tenacity retries: up to llm_max_retries (default 3), 2s→4s→8s backoff
+    - 30s timeout on OpenAI calls (via settings.llm_timeout_seconds)
+    - Graceful fallback: returns FALLBACK_COACH_MESSAGE instead of crashing
+      when all retries are exhausted
+    """
+    try:
+        return _traced_generate_chat(
+            messages=messages,
+            system_prompt=system_prompt,
+            **kwargs
+        )
+    except (ProviderError, ProviderNotConfiguredError) as exc:
+        logger.error(
+            "LLM call failed after retries, returning fallback response. error=%s",
+            exc,
+        )
+        return FALLBACK_COACH_MESSAGE
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
