@@ -414,7 +414,7 @@ def probe_ollama_connectivity(timeout: float = 0.8) -> bool:
         return False
 
 
-def probe_openai_connectivity(timeout: float = 3.0) -> bool:
+def probe_openai_connectivity(timeout: float = 8.0) -> bool:
     if not settings.openai_api_key:
         return False
     try:
