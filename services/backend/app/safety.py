@@ -301,12 +301,24 @@ def scope_check(message: str) -> bool:
     # Always in-scope: anything that looks like mental health / therapy / booking
     if _contains_any(message, IN_SCOPE_KEYWORDS):
         return True
-    # Very short messages (greetings, affirmations) are in scope
-    if len(message.strip().split()) <= 4:
+    # Very short messages (greetings, affirmations, brief replies) are in scope
+    if len(message.strip().split()) <= 6:
         return True
     # Questions about the user's own feelings are in scope
     lower = message.lower()
     if any(phrase in lower for phrase in ["i feel", "i am feeling", "i'm feeling", "feeling", "help me"]):
+        return True
+    # Conversational continuity — natural follow-ups in an ongoing dialogue
+    _CONVERSATIONAL_PHRASES = [
+        "i am good", "i'm good", "i am okay", "i'm okay", "and you",
+        "thank you", "thanks", "that helps", "that makes sense", "sounds good",
+        "tell me more", "what do you mean", "can you explain",
+        "how are you", "what about", "and then", "what next",
+        "that's helpful", "thats helpful", "i understand", "makes sense",
+        "go on", "please continue", "what else", "anything else",
+        "can you help", "i need help", "i need support",
+    ]
+    if any(phrase in lower for phrase in _CONVERSATIONAL_PHRASES):
         return True
     return False
 

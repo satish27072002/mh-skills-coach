@@ -57,8 +57,6 @@ from .safety import (
     classify_intent,
     contains_jailbreak_attempt,
     is_prescription_request,
-    is_emotional_state,
-    emotional_state_coach_response,
     scope_check,
     route_message,
     is_crisis,
@@ -929,12 +927,9 @@ def chat(
     # --- Load conversation history for context ---
     history = _load_history(session_key)
 
-    # --- Emotional state check — route to COACH with coping exercises ---
-    if is_emotional_state(message) and not is_crisis(message):
-        log_event("agent_routing", route="COACH_EMOTIONAL", correlation_id=correlation_id)
-        emotional_response = emotional_state_coach_response(message)
-        _append_to_history(session_key, message, emotional_response.coach_message or "")
-        return emotional_response
+    # Note: emotional state messages (anxious, stressed, sad, etc.) are intentionally
+    # routed through run_agent() below so the LLM can respond with full conversation
+    # history context — giving contextually-aware, non-repetitive coping guidance.
 
     if is_prescription_request(message):
         log_event("safety_trigger", trigger_type="prescription", correlation_id=correlation_id)
