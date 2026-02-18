@@ -18,11 +18,19 @@ CITY_TOKEN_RE = re.compile(r"^[\w\-\s]{2,40}$", flags=re.IGNORECASE)
 SYSTEM_PROMPT = THERAPIST_SEARCH_MASTER_PROMPT
 
 
+_LOCATION_SPLIT_PATTERN = (
+    r"\bwithin\s+\d+\s*(?:kms?|kilometers?|kilometres?)?\b"  # "within 10 km/kms"
+    r"|\bwith\s+in\s+\d+"                                    # "with in 10" (typo variant)
+    r"|\b\d+\s*(?:kms?|kilometers?|kilometres?)\b"           # trailing "10 km/kms"
+    r"|\bfor\b|[,.!?]"
+)
+
+
 def extract_location(message: str) -> str | None:
     match = re.search(r"\b(?:near|in|around|at)\s+(.+)", message, flags=re.IGNORECASE)
     if match:
         tail = re.split(
-            r"\bwithin\s+\d+\s*(?:km|kilometers?|kilometres?)?\b|\bfor\b|[,.!?]",
+            _LOCATION_SPLIT_PATTERN,
             match.group(1),
             maxsplit=1,
             flags=re.IGNORECASE,
@@ -36,7 +44,7 @@ def extract_location(message: str) -> str | None:
 
 def extract_location_from_short_reply(message: str) -> str | None:
     tail = re.split(
-        r"\bwithin\s+\d+\s*(?:km|kilometers?|kilometres?)?\b|\bfor\b|[,.!?]",
+        _LOCATION_SPLIT_PATTERN,
         message,
         maxsplit=1,
         flags=re.IGNORECASE,
@@ -50,14 +58,23 @@ def extract_location_from_short_reply(message: str) -> str | None:
 
 
 def extract_radius_km(message: str) -> int | None:
+    # Match "within 10 km/kms/kilometers" — "kms?" covers both km and kms
     match = re.search(
-        r"\bwithin\s+(\d{1,3})(?:\s*(?:km|kilometers?|kilometres?))?\b",
+        r"\bwithin\s+(\d{1,3})(?:\s*(?:kms?|kilometers?|kilometres?))?\b",
         message,
         flags=re.IGNORECASE,
     )
     if not match:
+        # Also handle "with in 10 km/kms" (space-separated typo)
         match = re.search(
-            r"\b(\d{1,3})\s*(?:km|kilometers?|kilometres?)\b",
+            r"\bwith\s+in\s+(\d{1,3})(?:\s*(?:kms?|kilometers?|kilometres?))?\b",
+            message,
+            flags=re.IGNORECASE,
+        )
+    if not match:
+        # Fallback: bare digit + km/kms anywhere in message
+        match = re.search(
+            r"\b(\d{1,3})\s*(?:kms?|kilometers?|kilometres?)\b",
             message,
             flags=re.IGNORECASE,
         )
@@ -334,10 +351,13 @@ class TherapistSearchAgent:
             results, fallback_reason = [], None
 
         if not results:
+            # Show the largest radius actually tried so the user gets accurate feedback.
+            # search_with_retries may have fallen back to 25 km automatically.
+            final_radius = max(parsed.radius_km, 25) if parsed.radius_km < 25 else parsed.radius_km
             return ChatResponse(
                 coach_message=(
-                    f"No providers found near {location} within {parsed.radius_km} km. "
-                    "Try a larger radius or nearby area."
+                    f"No providers found near {location} within {final_radius} km. "
+                    "Try a different city or a larger radius — I'm here to help."
                 ),
                 therapists=[],
             )
