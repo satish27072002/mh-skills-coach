@@ -911,8 +911,14 @@ def chat(
         _append_to_history(session_key, message, jailbreak_response.coach_message or "")
         return jailbreak_response
 
+    # --- Load conversation history BEFORE scope check so the LLM classifier
+    # can use conversation context to make smarter in/out-of-scope decisions ---
+    history = _load_history(session_key)
+
     # --- Scope check — only after safety/crisis is already handled ---
-    if not scope_check(message):
+    # Passes history so the LLM can see earlier messages (e.g. "bugs making me sad"
+    # means a follow-up "tips for debugging" is contextually in-scope).
+    if not scope_check(message, history):
         log_event("safety_trigger", trigger_type="out_of_scope", correlation_id=correlation_id)
         out_of_scope_response = ChatResponse(
             coach_message=(
@@ -923,9 +929,6 @@ def chat(
         )
         _append_to_history(session_key, message, out_of_scope_response.coach_message or "")
         return out_of_scope_response
-
-    # --- Load conversation history for context ---
-    history = _load_history(session_key)
 
     # Note: emotional state messages (anxious, stressed, sad, etc.) are intentionally
     # routed through run_agent() below so the LLM can respond with full conversation

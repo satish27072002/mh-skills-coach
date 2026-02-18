@@ -303,10 +303,8 @@ def is_emotional_state(message: str) -> bool:
     return True
 
 
-def scope_check(message: str) -> bool:
-    """Returns True if the message is within the app's scope.
-    Returns False if the user is asking for something completely unrelated
-    (e.g. coding help, news, general knowledge, etc.)."""
+def _keyword_scope_check(message: str) -> bool:
+    """Pure keyword-based scope check. Used as fast-path and fallback."""
     # Always in-scope: anything that looks like mental health / therapy / booking
     if _contains_any(message, IN_SCOPE_KEYWORDS):
         return True
@@ -330,6 +328,85 @@ def scope_check(message: str) -> bool:
     if any(phrase in lower for phrase in _CONVERSATIONAL_PHRASES):
         return True
     return False
+
+
+def _parse_scope_classification(content: str) -> bool | None:
+    """Parse LLM JSON response for scope classification.
+    Returns True/False if parsed successfully, None if parsing fails."""
+    import json
+    text = content.strip()
+    # Strip markdown code fences if present (e.g. ```json ... ```)
+    if text.startswith("```"):
+        lines = text.split("\n")
+        inner = lines[1:-1] if lines and lines[-1].strip() == "```" else lines[1:]
+        text = "\n".join(inner)
+    # Find first JSON object in the text
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1:
+        return None
+    try:
+        data = json.loads(text[start : end + 1])
+        return bool(data.get("in_scope", True))
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return None
+
+
+def llm_scope_check(
+    message: str,
+    history: list[dict] | None = None,
+    timeout: float = 3.0,
+) -> bool:
+    """LLM-based scope check with keyword fast-path and graceful fallback.
+
+    Decision logic:
+    1. Keyword fast-path: if IN_SCOPE_KEYWORDS matches → True (no LLM call)
+    2. LLM classifier with last-6-messages history context → True/False
+    3. On any LLM error or parse failure → True (fail-open: never block due to LLM issues)
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # Fast path — keyword match skips LLM entirely (~90% of normal traffic)
+    if _keyword_scope_check(message):
+        return True
+
+    # Try LLM classification with conversation context
+    try:
+        # Lazy imports to avoid circular import (safety.py is imported early)
+        from .llm.provider import generate_chat  # noqa: PLC0415
+        from .prompts import SCOPE_CLASSIFIER_PROMPT  # noqa: PLC0415
+
+        # Pass last 6 messages of history (3 exchanges) + current message
+        context_messages: list[dict[str, str]] = list((history or [])[-6:])
+        context_messages.append({"role": "user", "content": message})
+
+        content = generate_chat(
+            messages=context_messages,
+            system_prompt=SCOPE_CLASSIFIER_PROMPT,
+            timeout=timeout,
+        )
+        result = _parse_scope_classification(content)
+        if result is not None:
+            if not result:
+                logger.info("llm_scope_check: out_of_scope for message=%r", message[:80])
+            return result
+        # Parse failed — fail open
+        logger.warning("llm_scope_check: failed to parse LLM response=%r — allowing", content[:120])
+        return True
+    except Exception as exc:  # noqa: BLE001
+        # Any LLM error → fail open (never block a valid user due to LLM failure)
+        logger.warning("llm_scope_check: LLM call failed (%s) — allowing", exc)
+        return True
+
+
+def scope_check(message: str, history: list[dict] | None = None) -> bool:
+    """Returns True if the message is within the app's scope.
+
+    Uses LLM classification with conversation context when keyword fast-path does not match.
+    Falls back gracefully to allowing the message on any LLM error.
+    """
+    return llm_scope_check(message, history=history)
 
 
 def filter_unsafe_response(response: ChatResponse) -> ChatResponse:
