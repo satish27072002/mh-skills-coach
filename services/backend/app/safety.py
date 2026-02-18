@@ -185,22 +185,26 @@ PRESCRIPTION_KEYWORDS = [
     "diagnose"
 ]
 
-MEDICAL_ADVICE_OUTPUT_KEYWORDS = [
-    "take ",
-    "dosage",
-    "dose",
-    "mg",
-    "tablet",
-    "capsule",
-    "prescribe",
-    "prescription",
-    "medication",
-    "medicine",
-    "ssri",
-    "benzodiazepine",
-    "xanax",
-    "sertraline",
-    "fluoxetine",
+# These are checked with word-boundary regex in contains_medical_advice() below
+# to avoid false positives like "take a breath", "doesn't", "imagine".
+# Only add drug names, dosage terms, and explicit prescribing language here.
+MEDICAL_ADVICE_OUTPUT_PATTERNS = [
+    r"\btake\s+\d",                  # "take 2 tablets" — number after take
+    r"\btake\s+(this|these|the)\s+(medication|medicine|pill|tablet|capsule|drug)\b",
+    r"\bdosage\b",
+    r"\bdose\s+of\b",                # "dose of X" — not "doesn't"
+    r"\b\d+\s*mg\b",                 # "50mg" or "50 mg" — number required
+    r"\btablet\b",
+    r"\bcapsule\b",
+    r"\bprescribe\b",
+    r"\bprescription\b",
+    r"\bmedication\b",
+    r"\bmedicine\b",
+    r"\bssri\b",
+    r"\bbenzodiazepine\b",
+    r"\bxanax\b",
+    r"\bsertraline\b",
+    r"\bfluoxetine\b",
 ]
 
 # ---------------------------------------------------------------------------
@@ -265,7 +269,12 @@ def contains_jailbreak_attempt(message: str) -> bool:
 
 
 def contains_medical_advice(text: str) -> bool:
-    return _contains_any(text, MEDICAL_ADVICE_OUTPUT_KEYWORDS)
+    """Check if text contains actual medical prescribing language.
+    Uses word-boundary regex to avoid false positives like
+    'take a breath', 'doesn't', 'imagine', 'take care'.
+    """
+    lower = text.lower()
+    return any(re.search(pattern, lower) for pattern in MEDICAL_ADVICE_OUTPUT_PATTERNS)
 
 
 def is_crisis(message: str) -> bool:
