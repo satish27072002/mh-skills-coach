@@ -86,7 +86,14 @@ The app ONLY handles:
 
 Your task: Given a conversation history and the latest user message, decide if the latest message is in-scope.
 
-IMPORTANT CONTEXT RULE: If earlier messages in the conversation show the user is discussing something related to their mental health or emotional state, follow-up messages are in-scope even if they appear to drift slightly — for example, asking about a technical problem that is causing them stress, venting about work, or asking for advice about a situation that is making them anxious. The user's wellbeing remains the underlying topic.
+CONTEXT RULE: If earlier messages show the user discussing a specific stressor (e.g. work stress, coding problems causing anxiety), follow-up messages about THAT SAME STRESSOR are in-scope — because the user's emotional wellbeing is the underlying topic. However this only applies to messages directly related to the stressor, not to unrelated requests that happen to follow emotional messages.
+
+HARD LIMITS — these are ALWAYS out-of-scope, regardless of any prior context:
+- Creative writing requests (poems, stories, jokes, songs, essays, haikus)
+- General knowledge questions (capitals, history, science, trivia)
+- Coding help with no connection to a stated emotional stressor
+- Food, recipes, travel, sports, entertainment, hobbies
+- Requests to roleplay, pretend, or act as something else
 
 Always answer with ONLY valid JSON on a single line — no explanation, no markdown:
 {"in_scope": true, "reason": "brief reason"}
@@ -95,11 +102,14 @@ or
 
 Examples:
 - "how are you" → {"in_scope": true, "reason": "conversational greeting"}
-- "what's the weather today" → {"in_scope": false, "reason": "unrelated to mental health or therapy"}
-- [history: user said their code bugs are making them sad] + "tips for debugging" → {"in_scope": true, "reason": "user venting about work stress that is affecting their mood; emotionally contextual"}
-- "write me a python web scraper" → {"in_scope": false, "reason": "general coding request with no mental health context"}
-- "should i use websocket or http for chat" [after user said they are stressed about their project] → {"in_scope": true, "reason": "follows emotional context about work-related stress"}
+- "what's the weather today" → {"in_scope": false, "reason": "general knowledge, not mental health"}
+- [history: user said bugs are making them sad] + "tips for debugging" → {"in_scope": true, "reason": "asking about the specific stressor causing their distress"}
+- [history: user discussed anxiety] + "write me a poem about pasta" → {"in_scope": false, "reason": "creative writing — always out of scope regardless of context"}
+- [history: user discussed anxiety] + "which algorithm are we talking about?" → {"in_scope": true, "reason": "follow-up about the technical stressor causing their anxiety"}
+- [history: user felt stressed] + "tell me a joke" → {"in_scope": false, "reason": "entertainment request — always out of scope"}
+- "write me a python web scraper" → {"in_scope": false, "reason": "coding task with no connection to emotional wellbeing"}
 - "find a therapist in London" → {"in_scope": true, "reason": "therapist search"}
 - "book an appointment with dr smith" → {"in_scope": true, "reason": "booking flow"}
-- "what is the capital of France" → {"in_scope": false, "reason": "general knowledge question unrelated to mental health"}
+- "what is the capital of France" → {"in_scope": false, "reason": "general knowledge, not mental health"}
+- "recommend a recipe" → {"in_scope": false, "reason": "food request, always out of scope"}
 """

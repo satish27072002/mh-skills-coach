@@ -236,6 +236,10 @@ JAILBREAK_PATTERNS = [
     r"\bwrite (me )?(malware|a virus|ransomware|exploit code)\b",
     r"\bact as if (you have|there are) no (restrictions|rules|guidelines|limits)\b",
     r"\bimagine you (have no|are without) (restrictions|rules|guidelines|constraints)\b",
+    # Creative writing / general-assistant bypass attempts
+    r"\bwrite (me )?(a |an )?(poem|story|joke|song|essay|haiku|limerick|sonnet)\b",
+    r"\btell me (a |an )?(joke|story|fun fact|riddle|anecdote)\b",
+    r"\bcan you (write|compose|create|generate) (a |an )?(poem|story|song|essay|joke)\b",
 ]
 
 # ---------------------------------------------------------------------------
