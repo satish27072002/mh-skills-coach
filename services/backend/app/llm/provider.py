@@ -414,15 +414,26 @@ def probe_ollama_connectivity(timeout: float = 0.8) -> bool:
         return False
 
 
-def probe_openai_connectivity(timeout: float = 8.0) -> bool:
+def probe_openai_connectivity(timeout: float = 8.0) -> dict:
+    """Returns {"ok": bool, "reason": str} for diagnostic visibility in /status endpoint."""
     if not settings.openai_api_key:
-        return False
+        logger.warning("probe_openai_connectivity: OPENAI_API_KEY is not set or empty")
+        return {"ok": False, "reason": "no_api_key"}
     try:
         response = httpx.get(
             f"{OPENAI_BASE_URL}/models",
             headers={"Authorization": f"Bearer {settings.openai_api_key}"},
             timeout=timeout
         )
-        return response.status_code == 200
-    except httpx.HTTPError:
-        return False
+        if response.status_code == 200:
+            logger.info("probe_openai_connectivity: OK (HTTP 200)")
+            return {"ok": True, "reason": "ok"}
+        logger.warning(
+            "probe_openai_connectivity: HTTP %s — body: %s",
+            response.status_code,
+            response.text[:200],
+        )
+        return {"ok": False, "reason": f"http_{response.status_code}"}
+    except httpx.HTTPError as exc:
+        logger.warning("probe_openai_connectivity: exception %s: %s", type(exc).__name__, exc)
+        return {"ok": False, "reason": f"exception_{type(exc).__name__}"}

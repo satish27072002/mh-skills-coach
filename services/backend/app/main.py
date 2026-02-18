@@ -489,7 +489,9 @@ def status() -> dict[str, Any]:
     pg_ready = pgvector_ready()
     openai_enabled = llm_provider == "openai" or embed_provider == "openai"
     ollama_enabled = llm_provider == "ollama" or embed_provider == "ollama"
-    openai_ok = probe_openai_connectivity() if openai_enabled else False
+    openai_probe = probe_openai_connectivity() if openai_enabled else {"ok": False, "reason": "not_enabled"}
+    openai_ok: bool = openai_probe["ok"]
+    openai_reason: str = openai_probe["reason"]
     ollama_ok = probe_ollama_connectivity() if ollama_enabled else False
     mcp_ok = probe_mcp_health() if settings.mcp_base_url else False
     if llm_provider == "mock":
@@ -512,7 +514,7 @@ def status() -> dict[str, Any]:
         else:
             model = "mock"
     provider_warnings: list[str] = []
-    if settings.dev_mode and openai_enabled and not settings.openai_api_key:
+    if openai_enabled and not settings.openai_api_key:
         if llm_provider == "openai":
             provider_warnings.append("LLM provider openai missing OPENAI_API_KEY.")
         if embed_provider == "openai":
@@ -523,6 +525,7 @@ def status() -> dict[str, Any]:
         "embed_provider": embed_provider,
         "embed_dim": get_cached_embedding_dim(),
         "openai_ok": openai_ok,
+        "openai_reason": openai_reason,
         "ollama_ok": ollama_ok,
         "mcp_ok": mcp_ok,
         "ollama_reachable": ollama_ok,
