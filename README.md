@@ -1,7 +1,7 @@
 # MH Skills Coach
 
 **Live Demo:** [https://mh-skills-coach.francecentral.cloudapp.azure.com/](https://mh-skills-coach.francecentral.cloudapp.azure.com/)
-
+(NOTE: The VM could be switched off due to resource constraints, if you are hiring officer or user please mail me i can switch it ON)
 > A production-grade, safety-first AI system for mental health coping skills coaching and care navigation.
 > **Not clinical care.** Not therapy. A bridge between self-help and professional support.
 
