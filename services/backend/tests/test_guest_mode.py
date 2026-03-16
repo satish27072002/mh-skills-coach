@@ -26,9 +26,9 @@ def _mock_run_agent(message: str, **kwargs):
 
 
 def test_guest_start_creates_session():
-    """POST /guest/start should create a guest session and return cookie."""
+    """POST /guest should create a guest session and return cookie."""
     client = TestClient(app)
-    response = client.post("/guest/start")
+    response = client.post("/guest")
     assert response.status_code == 200
     payload = response.json()
     assert payload["is_guest"] is True
@@ -40,12 +40,12 @@ def test_guest_start_creates_session():
 
 
 def test_guest_start_reuses_existing_session():
-    """Calling /guest/start again should reuse the same session."""
+    """Calling /guest again should reuse the same session."""
     client = TestClient(app)
-    r1 = client.post("/guest/start")
+    r1 = client.post("/guest")
     assert r1.status_code == 200
     # Call again — client automatically sends cookie back
-    r2 = client.post("/guest/start")
+    r2 = client.post("/guest")
     assert r2.status_code == 200
     assert r2.json()["guest_prompts_used"] == 0
 
@@ -53,7 +53,7 @@ def test_guest_start_reuses_existing_session():
 def test_me_returns_guest_info():
     """GET /me with a guest session should return guest info, not 401."""
     client = TestClient(app)
-    client.post("/guest/start")
+    client.post("/guest")
     response = client.get("/me")
     assert response.status_code == 200
     payload = response.json()
@@ -73,7 +73,7 @@ def test_guest_chat_counts_prompts(monkeypatch):
     """Guest chat messages should decrement the remaining prompt count."""
     monkeypatch.setattr("app.main.run_agent", _mock_run_agent)
     client = TestClient(app)
-    client.post("/guest/start")
+    client.post("/guest")
 
     r = client.post("/chat", json={"message": "I feel anxious"})
     assert r.status_code == 200
@@ -88,7 +88,7 @@ def test_guest_chat_enforces_limit(monkeypatch):
     settings.guest_prompt_limit = 3
     try:
         client = TestClient(app)
-        client.post("/guest/start")
+        client.post("/guest")
 
         for i in range(3):
             r = client.post("/chat", json={"message": f"Message {i + 1}"})

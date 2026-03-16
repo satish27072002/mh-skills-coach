@@ -864,7 +864,7 @@ def get_me(request: Request, response: Response, db: Session = Depends(get_db)) 
     }
 
 
-@app.post("/guest/start")
+@app.post("/guest")
 def guest_start(request: Request) -> JSONResponse:
     """Create a guest session with limited prompts."""
     existing = _get_guest_session_token(request)
