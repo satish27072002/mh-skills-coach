@@ -137,12 +137,13 @@ Request
 
 | Dimension | Score (1–5) |
 |-----------|------------|
-| Empathy | *Run `python -m evals.response_quality_eval` to populate* |
-| Helpfulness | *—* |
-| Safety | *—* |
-| Boundaries | *—* |
+| Empathy | **4.13 / 5.00** |
+| Helpfulness | **4.40 / 5.00** |
+| Safety | **5.00 / 5.00** |
+| Boundaries | **4.93 / 5.00** |
+| **Overall** | **4.62 / 5.00** |
 
-> To run the evaluator: `cd services/backend && python -m evals.response_quality_eval`
+> To re-run: `cd services/backend && python -m evals.response_quality_eval`
 > Results saved to `services/backend/evals/results.json`
 
 ### Performance
