@@ -23,6 +23,7 @@ def _mock_run_agent(message: str, **kwargs):
             "risk_level": "normal",
             "exercise": {
                 "type": "Box Breathing",
+                "duration_seconds": 240,
                 "steps": [
                     "Breathe in slowly for 4 seconds",
                     "Hold your breath for 4 seconds",
@@ -37,6 +38,7 @@ def _mock_run_agent(message: str, **kwargs):
             "risk_level": "normal",
             "exercise": {
                 "type": "Self-Compassion Pause",
+                "duration_seconds": 180,
                 "steps": [
                     "Place your hand on your chest",
                     "Acknowledge: this is a moment of suffering",
@@ -50,6 +52,7 @@ def _mock_run_agent(message: str, **kwargs):
         "risk_level": "normal",
         "exercise": {
             "type": "5-4-3-2-1 Grounding",
+            "duration_seconds": 300,
             "steps": [
                 "Notice 5 things you can see",
                 "Notice 4 things you can touch",
