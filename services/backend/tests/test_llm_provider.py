@@ -127,7 +127,8 @@ def test_probe_openai_connectivity_short_circuits_without_key(monkeypatch):
         raise AssertionError("openai probe should not call network without key")
 
     monkeypatch.setattr(llm_provider.httpx, "get", fail_get)
-    assert llm_provider.probe_openai_connectivity() is False
+    result = llm_provider.probe_openai_connectivity()
+    assert result["ok"] is False
 
 
 def test_generate_chat_mock_mentions_context(monkeypatch):

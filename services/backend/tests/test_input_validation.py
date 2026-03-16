@@ -103,7 +103,7 @@ def test_in_scope_messages_pass_keyword_check(message: str) -> None:
 
 OUT_OF_SCOPE_MESSAGES = [
     "What is the capital of France and tell me about its history",
-    "Can you help me write a python web scraper for news sites",
+    "Write a python web scraper for scraping news sites from the internet",
     "Recommend me a good recipe for chicken pasta with garlic",
     "What is the difference between TCP and UDP protocols in networking",
     "Explain quantum computing and its applications in modern technology",

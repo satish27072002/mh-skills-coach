@@ -73,7 +73,7 @@ def test_status_switches_when_openai_and_pgvector_ready(monkeypatch):
     monkeypatch.setattr(settings, "openai_api_key", "test-key")
     monkeypatch.setattr(settings, "mcp_base_url", "http://mcp:7000")
     monkeypatch.setattr(main, "pgvector_ready", lambda: True)
-    monkeypatch.setattr(main, "probe_openai_connectivity", lambda *args, **kwargs: True)
+    monkeypatch.setattr(main, "probe_openai_connectivity", lambda *args, **kwargs: {"ok": True, "reason": "ok"})
     monkeypatch.setattr(main, "probe_mcp_health", lambda *args, **kwargs: True)
     client = TestClient(main.app)
 

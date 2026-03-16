@@ -230,13 +230,13 @@ JAILBREAK_PATTERNS = [
     r"\bjailbreak\b",
     r"\bdeveloper mode\b",
     r"\bdo anything now\b",
-    r"\byou are now (chatgpt|dan|unrestricted|free|unfiltered|uncensored)\b",
-    r"\bact as (a|an)? (unrestricted|unfiltered|uncensored|evil|dangerous)\b",
-    r"\bpretend (you are|to be) (a|an)? ?(general|unrestricted|free|evil|dangerous|different)\b",
-    r"\bforget (all|your|every|the) (rules|instructions|guidelines|training|constraints|limits)\b",
+    r"\byou are now (an? )?(chatgpt|dan|unrestricted|free|unfiltered|uncensored)\b",
+    r"\bact as (a |an )?(unrestricted|unfiltered|uncensored|evil|dangerous)\b",
+    r"\bpretend (you are|to be) (a |an )?(general|unrestricted|free|evil|dangerous|different|dan)\b",
+    r"\bforget (all |your |every |the )?(rules|instructions|guidelines|training|constraints|limits)\b",
     r"\byou have no (rules|restrictions|limits|guidelines|constraints)\b",
     r"\bno (rules|restrictions|limits|guidelines|constraints) apply\b",
-    r"\bdisregard (all|any|your|previous|prior) (instructions|rules|policy|guidelines|safety)\b",
+    r"\bdisregard (all |any |your |previous |prior )*(instructions|rules|policy|guidelines|safety)\b",
     r"\bbypass (the )?(safety|filter|guardrail|restriction|rule|policy)\b",
     r"\bstop being (a|an)? ?(assistant|coach|bot|ai|mental health)\b",
     r"\byou are (not|no longer) (bound by|restricted by|limited by|following)\b",
@@ -250,9 +250,9 @@ JAILBREAK_PATTERNS = [
     r"\bact as if (you have|there are) no (restrictions|rules|guidelines|limits)\b",
     r"\bimagine you (have no|are without) (restrictions|rules|guidelines|constraints)\b",
     # Creative writing / general-assistant bypass attempts
-    r"\bwrite (me )?(a |an )?(poem|story|joke|song|essay|haiku|limerick|sonnet)\b",
-    r"\btell me (a |an )?(joke|story|fun fact|riddle|anecdote)\b",
-    r"\bcan you (write|compose|create|generate) (a |an )?(poem|story|song|essay|joke)\b",
+    r"\bwrite (me )?(a |an )?(\w+ )?(poem|story|joke|song|essay|haiku|limerick|sonnet)\b",
+    r"\btell me (a |an )?(\w+ )?(joke|story|fun fact|riddle|anecdote)\b",
+    r"\bcan you (write|compose|create|generate) (a |an )?(\w+ )?(poem|story|song|essay|joke)\b",
 ]
 
 # ---------------------------------------------------------------------------
