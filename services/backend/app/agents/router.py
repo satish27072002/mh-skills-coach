@@ -9,32 +9,45 @@ from app.safety import classify_intent
 
 
 THERAPIST_SEARCH_KEYWORDS = [
-    "find therapist",
-    "find a therapist",
-    "therapist near",
-    "therapists near",
-    "clinic near",
-    "provider near",
-    "psychiatry",
-    "psychiatrist",
-    "psychiatry clinic",
-    "bup",
-    "mottagning",
-    "mental health clinic",
-    "find clinic",
+    # Existing
+    "find therapist", "find a therapist", "therapist near", "therapists near",
+    "clinic near", "provider near", "psychiatry", "psychiatrist",
+    "psychiatry clinic", "bup", "mottagning", "mental health clinic", "find clinic",
+    # Broader professional types
+    "find a doctor", "doctor near", "find doctor",
+    "find a counselor", "find a counsellor", "find counselor", "find counsellor",
+    "counseling near", "counselling near",
+    "find a psychologist", "find psychologist", "psychologist near",
+    "psychotherapy", "psychotherapist",
+    # Natural phrasing
+    "therapy near", "therapy in", "therapist in",
+    "counselor in", "counsellor in", "psychologist in",
+    "see a therapist", "see a counselor", "see a psychologist", "see a doctor",
+    "looking for a therapist", "looking for therapist",
+    "need a therapist", "need therapist",
+    "recommend a therapist", "suggest a therapist",
+    "any therapists", "any counselors", "any psychologists",
+    "mental health professional", "mental health provider",
+    "therapy services", "counseling services", "counselling services",
+    "where can i find a therapist", "where can i get help",
+    "help me find a therapist", "help me find therapist",
+    "i need professional help",
 ]
 
 
 ChatRoute = Literal["THERAPIST_SEARCH", "BOOKING_EMAIL", "COACH"]
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 EMAIL_INTENT_KEYWORDS = (
-    "send email",
+    "send email", "send an email", "send a email",
+    "write email", "write an email",
+    "compose email", "compose an email",
+    "draft email", "draft an email",
     "email",
-    "appointment",
-    "schedule",
-    "book",
-    "contact therapist",
-    "draft email",
+    "appointment", "schedule", "book", "booking",
+    "contact therapist", "contact them",
+    "reach out to", "reach out",
+    "send a message", "send message",
+    "help me book", "help me schedule",
 )
 
 

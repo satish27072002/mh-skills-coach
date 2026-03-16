@@ -127,14 +127,27 @@ EMOTIONAL_STATE_KEYWORDS = [
 ]
 
 THERAPIST_SEARCH_KEYWORDS = [
-    "find therapist",
-    "find a therapist",
-    "therapist near me",
-    "book therapist",
-    "book a therapist",
-    "counsellor near me",
-    "counselor near me",
-    "find me a therapist"
+    # Direct therapist search
+    "find therapist", "find a therapist", "find me a therapist",
+    "therapist near me", "therapist near", "therapist in",
+    "book therapist", "book a therapist",
+    # Counselor/counsellor
+    "counsellor near me", "counselor near me",
+    "find a counselor", "find a counsellor", "counselor in", "counsellor in",
+    "counseling near", "counselling near",
+    # Doctor / psychologist / psychiatrist
+    "find a doctor", "doctor near me", "doctor near",
+    "find a psychologist", "psychologist near", "psychologist in",
+    "psychiatrist near", "find a psychiatrist",
+    "psychotherapist", "psychotherapy",
+    # Natural phrasing
+    "see a therapist", "see a counselor", "see a psychologist",
+    "looking for a therapist", "need a therapist",
+    "recommend a therapist", "suggest a therapist",
+    "therapy near", "therapy in", "therapy services",
+    "mental health professional", "mental health provider",
+    "where can i find a therapist", "where can i get help",
+    "help me find a therapist", "i need professional help",
 ]
 
 PRESCRIPTION_KEYWORDS = [
@@ -456,8 +469,19 @@ def is_therapist_search(message: str) -> bool:
     if _contains_any(message, THERAPIST_SEARCH_KEYWORDS):
         return True
     message_lower = message.lower()
-    has_term = any(term in message_lower for term in ["therapist", "counselor", "counsellor"])
-    has_intent = any(term in message_lower for term in ["find", "near me", "book", "search"])
+    # Professional terms that indicate therapist search
+    professional_terms = [
+        "therapist", "counselor", "counsellor", "psychologist",
+        "psychiatrist", "psychotherapist", "doctor",
+    ]
+    # Intent verbs/phrases that indicate a search action
+    search_intents = [
+        "find", "near me", "near", "book", "search", "looking for",
+        "recommend", "suggest", "see a", "need a", "where",
+        "help me find", "any", "in my area",
+    ]
+    has_term = any(term in message_lower for term in professional_terms)
+    has_intent = any(term in message_lower for term in search_intents)
     return has_term and has_intent
 
 

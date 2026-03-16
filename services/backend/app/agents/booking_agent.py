@@ -40,6 +40,37 @@ def is_confirmation_only_message(message: str) -> bool:
     return all(token in allowed for token in tokens)
 
 
+# Broader email/booking intent phrases — catches natural language like
+# "can you send an email for me" without requiring email address or datetime.
+_EMAIL_SEND_PHRASES = [
+    "send an email", "send email", "send a email",
+    "write an email", "write email", "write a email",
+    "compose an email", "compose email",
+    "draft an email", "draft email", "draft a email",
+    "email them", "email this", "email the therapist",
+    "contact them", "contact the therapist",
+    "reach out to", "reach out",
+    "send a message", "send message",
+    "book an appointment", "make an appointment", "schedule an appointment",
+    "book appointment", "make appointment", "schedule appointment",
+    "request an appointment", "request appointment",
+    "can you email", "could you email",
+    "can you send", "could you send",
+    "please email", "please send",
+    "i want to email", "i want to send",
+    "i'd like to email", "i'd like to send",
+    "help me email", "help me send",
+    "help me book", "help me schedule",
+]
+
+
+def _has_email_send_intent(message: str) -> bool:
+    """Broader email/booking intent — catches natural phrasing without
+    requiring email address or datetime in the message."""
+    lower = message.lower()
+    return any(phrase in lower for phrase in _EMAIL_SEND_PHRASES)
+
+
 def _pending_payload_complete(payload: dict[str, str | None]) -> bool:
     return bool(
         payload.get("therapist_email")
@@ -235,7 +266,7 @@ class BookingEmailAgent:
                 requires_confirmation=False,
             )
 
-        if not is_booking_intent(message):
+        if not is_booking_intent(message) and not _has_email_send_intent(message):
             return None
 
         extracted = extract_booking_data(message)
