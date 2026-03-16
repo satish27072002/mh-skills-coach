@@ -32,6 +32,8 @@ export default function Home() {
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isGuest, setIsGuest] = useState(false);
+  const [guestPromptsRemaining, setGuestPromptsRemaining] = useState<number | null>(null);
   const [authStatus, setAuthStatus] = useState<"loading" | "ready">("loading");
   const [premiumStatus, setPremiumStatus] = useState<"unknown" | "free" | "premium">("unknown");
   const [checkoutLoading, setCheckoutLoading] = useState(false);
@@ -73,8 +75,16 @@ export default function Home() {
         }
         const data = await res.json();
         if (!cancelled) {
-          setIsAuthenticated(true);
-          setPremiumStatus(data.is_premium ? "premium" : "free");
+          if (data.is_guest) {
+            setIsGuest(true);
+            setIsAuthenticated(false);
+            setGuestPromptsRemaining(data.guest_prompts_remaining ?? null);
+            setPremiumStatus("free");
+          } else {
+            setIsAuthenticated(true);
+            setIsGuest(false);
+            setPremiumStatus(data.is_premium ? "premium" : "free");
+          }
           setAuthStatus("ready");
         }
       } catch {
@@ -149,6 +159,9 @@ export default function Home() {
         throw new Error("Request failed");
       }
       const data = (await res.json()) as ChatResponse;
+      if (isGuest && data.guest_prompts_remaining != null) {
+        setGuestPromptsRemaining(data.guest_prompts_remaining);
+      }
       const assistantMsg: Message = {
         id: crypto.randomUUID(),
         role: "assistant",
@@ -251,6 +264,11 @@ export default function Home() {
         <>
           <StatusBadge />
           <ThemeToggle />
+          {isGuest && guestPromptsRemaining != null ? (
+            <Badge variant={guestPromptsRemaining > 5 ? "secondary" : guestPromptsRemaining > 0 ? "warning" : "destructive"}>
+              {guestPromptsRemaining} prompt{guestPromptsRemaining !== 1 ? "s" : ""} left
+            </Badge>
+          ) : null}
           <Button
             variant={premiumStatus === "premium" ? "default" : "secondary"}
             size="sm"
@@ -259,6 +277,8 @@ export default function Home() {
                 setTherapistModalOpen(true);
                 setTherapistResults([]);
                 setTherapistError(null);
+              } else if (isGuest) {
+                router.push("/login");
               } else {
                 startCheckout();
               }
@@ -266,10 +286,18 @@ export default function Home() {
             disabled={checkoutLoading || premiumStatus === "unknown"}
           >
             <Search className="h-4 w-4" />
-            {premiumStatus === "premium" ? "Find a therapist" : "Get Premium to find a therapist"}
+            {premiumStatus === "premium" ? "Find a therapist" : isGuest ? "Sign in to find a therapist" : "Get Premium to find a therapist"}
           </Button>
           {premiumStatus === "premium" ? (
             <Badge variant="success">Premium Active</Badge>
+          ) : isGuest ? (
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => router.push("/login")}
+            >
+              Sign in with Google
+            </Button>
           ) : (
             <Button
               variant="default"
@@ -283,7 +311,8 @@ export default function Home() {
           <UserMenu
             isAuthenticated={isAuthenticated}
             isPremium={premiumStatus === "premium"}
-            onUpgrade={startCheckout}
+            isGuest={isGuest}
+            onUpgrade={isGuest ? () => router.push("/login") : startCheckout}
           />
         </>
       }
@@ -322,6 +351,19 @@ export default function Home() {
 
           <Separator />
 
+          {isGuest && guestPromptsRemaining != null && guestPromptsRemaining <= 0 ? (
+            <Card className="border-amber-200 bg-amber-50 dark:border-amber-900/70 dark:bg-amber-950/30">
+              <CardContent className="flex items-center justify-between gap-3 p-3">
+                <p className="text-sm text-amber-800 dark:text-amber-200">
+                  You have used all 15 guest prompts. Sign in for unlimited access.
+                </p>
+                <Button size="sm" onClick={() => router.push("/login")}>
+                  Sign in
+                </Button>
+              </CardContent>
+            </Card>
+          ) : null}
+
           <div className="space-y-2">
             <Textarea
               value={input}
@@ -335,10 +377,15 @@ export default function Home() {
               rows={3}
               className="resize-none"
               placeholder="I feel anxious right now..."
+              disabled={isGuest && guestPromptsRemaining != null && guestPromptsRemaining <= 0}
             />
             <div className="flex items-center justify-between gap-3">
-              <span className="text-xs text-muted-foreground">Enter to send, Shift+Enter for newline</span>
-              <Button onClick={handleSend} disabled={isSending || !input.trim()}>
+              <span className="text-xs text-muted-foreground">
+                {isGuest && guestPromptsRemaining != null
+                  ? `${guestPromptsRemaining} prompt${guestPromptsRemaining !== 1 ? "s" : ""} remaining \u00B7 Enter to send`
+                  : "Enter to send, Shift+Enter for newline"}
+              </span>
+              <Button onClick={handleSend} disabled={isSending || !input.trim() || (isGuest && guestPromptsRemaining != null && guestPromptsRemaining <= 0)}>
                 {isSending ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />

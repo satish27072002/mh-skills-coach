@@ -3,7 +3,9 @@ import type { NextRequest } from "next/server";
 
 export async function middleware(req: NextRequest) {
   const sessionCookie = req.cookies.get("mh_session");
-  if (!sessionCookie?.value) {
+  const guestCookie = req.cookies.get("mh_guest_session");
+  // Allow access if user has either an auth session or a guest session
+  if (!sessionCookie?.value && !guestCookie?.value) {
     const loginUrl = req.nextUrl.clone();
     loginUrl.pathname = "/login";
     loginUrl.searchParams.set("redirect", "/");

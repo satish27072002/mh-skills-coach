@@ -35,5 +35,9 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     cookie_samesite: str = "lax"  # "lax" for localhost, "none" for tunnel/https
 
+    # Guest mode
+    guest_session_cookie_name: str = "mh_guest_session"
+    guest_prompt_limit: int = 15
+
 
 settings = Settings()

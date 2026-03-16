@@ -26,6 +26,7 @@ export type ChatResponse = {
   }[];
   sources?: { source_id: string; text?: string; snippet?: string }[];
   risk_level?: string;
+  guest_prompts_remaining?: number | null;
 };
 
 export type Message = {

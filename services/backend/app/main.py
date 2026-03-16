@@ -109,9 +109,40 @@ app.add_middleware(
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 BOOKING_SESSION_COOKIE_NAME = "mh_booking_session"
+GUEST_SESSION_COOKIE_NAME = settings.guest_session_cookie_name
 logger = logging.getLogger(__name__)
 UTC = ZoneInfo("UTC")
 _LAST_THERAPIST_LOCATION_BY_SESSION = LAST_THERAPIST_LOCATION_BY_SESSION
+
+# Guest mode: track prompt counts per guest session token
+_guest_prompt_counts: dict[str, int] = {}
+
+
+def _get_guest_session_token(request: Request) -> str | None:
+    token = request.cookies.get(GUEST_SESSION_COOKIE_NAME)
+    if token and token.strip():
+        return token.strip()
+    return None
+
+
+def _ensure_guest_session(request: Request, response: Response) -> str:
+    existing = _get_guest_session_token(request)
+    if existing:
+        return existing
+    token = secrets.token_urlsafe(24)
+    _set_cookie(response, GUEST_SESSION_COOKIE_NAME, token, request=request)
+    _guest_prompt_counts[token] = 0
+    return token
+
+
+def _get_guest_prompt_count(token: str) -> int:
+    return _guest_prompt_counts.get(token, 0)
+
+
+def _increment_guest_prompt_count(token: str) -> int:
+    count = _guest_prompt_counts.get(token, 0) + 1
+    _guest_prompt_counts[token] = count
+    return count
 
 
 def _extract_location(message: str) -> str | None:
@@ -735,9 +766,20 @@ def auth_google_callback(request: Request, db: Session = Depends(get_db)) -> Res
 
 
 @app.get("/me")
-def get_me(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+def get_me(request: Request, response: Response, db: Session = Depends(get_db)) -> dict[str, Any]:
     user = _get_user_from_cookie(db, request)
     if not user:
+        # Check for guest session
+        guest_token = _get_guest_session_token(request)
+        if guest_token:
+            used = _get_guest_prompt_count(guest_token)
+            return {
+                "is_guest": True,
+                "is_premium": False,
+                "guest_prompts_used": used,
+                "guest_prompts_limit": settings.guest_prompt_limit,
+                "guest_prompts_remaining": max(0, settings.guest_prompt_limit - used),
+            }
         raise HTTPException(status_code=401, detail="not authenticated")
     return {
         "id": str(user.id),
@@ -745,8 +787,35 @@ def get_me(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
         "email": user.email,
         "name": user.name,
         "is_premium": user.is_premium,
+        "is_guest": False,
         "premium_until": user.premium_until,
     }
+
+
+@app.post("/guest/start")
+def guest_start(request: Request) -> JSONResponse:
+    """Create a guest session with limited prompts."""
+    existing = _get_guest_session_token(request)
+    if existing:
+        used = _get_guest_prompt_count(existing)
+        return JSONResponse(content={
+            "status": "ok",
+            "is_guest": True,
+            "guest_prompts_used": used,
+            "guest_prompts_limit": settings.guest_prompt_limit,
+            "guest_prompts_remaining": max(0, settings.guest_prompt_limit - used),
+        })
+    token = secrets.token_urlsafe(24)
+    _guest_prompt_counts[token] = 0
+    response = JSONResponse(content={
+        "status": "ok",
+        "is_guest": True,
+        "guest_prompts_used": 0,
+        "guest_prompts_limit": settings.guest_prompt_limit,
+        "guest_prompts_remaining": settings.guest_prompt_limit,
+    })
+    _set_cookie(response, GUEST_SESSION_COOKIE_NAME, token, request=request)
+    return response
 
 
 @app.post("/logout")
@@ -788,6 +857,23 @@ def chat(
 ) -> ChatResponse:
     message = payload.message.strip()
     user = _get_user_from_cookie(db, request)
+
+    # Guest mode: enforce prompt limit for unauthenticated users
+    guest_token: str | None = None
+    if not user:
+        guest_token = _get_guest_session_token(request)
+        if guest_token:
+            used = _get_guest_prompt_count(guest_token)
+            if used >= settings.guest_prompt_limit:
+                remaining = settings.guest_prompt_limit - used
+                return ChatResponse(
+                    coach_message=(
+                        f"You've used all {settings.guest_prompt_limit} free guest prompts. "
+                        "Sign in with Google to continue chatting with unlimited access."
+                    ),
+                    risk_level="guest_limit_reached",
+                )
+
     if contains_jailbreak_attempt(message):
         return ChatResponse(
             coach_message=(
@@ -830,8 +916,17 @@ def chat(
         actor_key,
     )
 
+    def _count_guest_prompt(result: ChatResponse) -> ChatResponse:
+        """Increment guest prompt counter and add remaining info."""
+        if guest_token:
+            count = _increment_guest_prompt_count(guest_token)
+            remaining = max(0, settings.guest_prompt_limit - count)
+            result.guest_prompts_remaining = remaining
+            logger.info("guest_prompt_used token=%s count=%d remaining=%d", guest_token[:8], count, remaining)
+        return result
+
     if route == "THERAPIST_SEARCH":
-        return therapist_agent.handle(user=user, request=request, message=message)
+        return _count_guest_prompt(therapist_agent.handle(user=user, request=request, message=message))
 
     if route == "BOOKING_EMAIL":
         if not actor_key:
@@ -846,10 +941,10 @@ def chat(
             pending_expired=pending_expired,
         )
         if booking_response:
-            return booking_response
+            return _count_guest_prompt(booking_response)
 
     response_json = run_agent(message)
-    return ChatResponse(**response_json)
+    return _count_guest_prompt(ChatResponse(**response_json))
 
 
 @app.post("/payments/create-checkout-session", response_model=CheckoutSessionResponse)
