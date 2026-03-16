@@ -61,6 +61,7 @@ class ChatResponse(BaseModel):
     booking_proposal: BookingProposal | None = None
     requires_confirmation: bool | None = None
     risk_level: str | None = None
+    guest_prompts_remaining: int | None = None
 
 
 class CheckoutSessionResponse(BaseModel):

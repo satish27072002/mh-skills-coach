@@ -8,9 +8,6 @@ from app.models import PendingAction, User
 from app.schemas import TherapistResult
 
 
-ORIGINAL_DATABASE_URL = str(db.engine.url)
-
-
 def _reset_db():
     db.reset_engine("sqlite+pysqlite:///./test_therapists.db")
     db.init_db()
@@ -22,9 +19,10 @@ def _reset_db():
 
 @pytest.fixture()
 def test_db():
+    original_url = str(db.engine.url)
     _reset_db()
     yield
-    db.reset_engine(ORIGINAL_DATABASE_URL)
+    db.reset_engine(original_url)
 
 
 def test_therapist_search_requires_sign_in_when_unauthenticated(test_db):

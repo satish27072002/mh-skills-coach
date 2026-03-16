@@ -7,18 +7,16 @@ from app.mcp_client import MCPClientError
 from app.models import OutboundEmail
 
 
-ORIGINAL_DATABASE_URL = str(db.engine.url)
-
-
 @pytest.fixture()
 def email_db():
+    original_url = str(db.engine.url)
     db.reset_engine("sqlite+pysqlite:///./test_email_orchestrator.db")
     db.init_db()
     with db.SessionLocal() as session:
         session.query(OutboundEmail).delete()
         session.commit()
     yield
-    db.reset_engine(ORIGINAL_DATABASE_URL)
+    db.reset_engine(original_url)
 
 
 def test_rate_limit_blocks_fourth_attempt(monkeypatch, email_db):

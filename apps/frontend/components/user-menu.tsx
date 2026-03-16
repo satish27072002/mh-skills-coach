@@ -16,10 +16,12 @@ import { Button } from "./ui/button";
 export default function UserMenu({
   isAuthenticated,
   isPremium,
+  isGuest,
   onUpgrade
 }: {
   isAuthenticated: boolean;
   isPremium: boolean;
+  isGuest?: boolean;
   onUpgrade: () => void;
 }) {
   const router = useRouter();
@@ -40,8 +42,13 @@ export default function UserMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuLabel>{isPremium ? "Premium account" : "Free account"}</DropdownMenuLabel>
+        <DropdownMenuLabel>{isGuest ? "Guest session" : isPremium ? "Premium account" : "Free account"}</DropdownMenuLabel>
         <DropdownMenuSeparator />
+        {isGuest ? (
+          <DropdownMenuItem onClick={() => router.push("/login")}>
+            Sign in with Google
+          </DropdownMenuItem>
+        ) : null}
         {!isPremium && isAuthenticated ? <DropdownMenuItem onClick={onUpgrade}>Upgrade to premium</DropdownMenuItem> : null}
         {isAuthenticated ? (
           <DropdownMenuItem onClick={handleLogout} className="text-red-600 dark:text-red-400">

@@ -10,11 +10,9 @@ from app.main import app
 from app.models import StripeEvent, User
 
 
-ORIGINAL_DATABASE_URL = str(db.engine.url)
-
-
 @pytest.fixture()
 def test_db():
+    original_url = str(db.engine.url)
     db.reset_engine("sqlite+pysqlite:///./test_payments.db")
     db.init_db()
     with db.SessionLocal() as session:
@@ -22,7 +20,7 @@ def test_db():
         session.query(User).delete()
         session.commit()
     yield
-    db.reset_engine(ORIGINAL_DATABASE_URL)
+    db.reset_engine(original_url)
 
 
 def test_webhook_idempotency(test_db, monkeypatch):

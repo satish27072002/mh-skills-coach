@@ -17,21 +17,19 @@ from app.main import app, _rate_limiter
 from app.models import User
 
 
-ORIGINAL_DATABASE_URL = str(db.engine.url)
-
-
 # ---------------------------------------------------------------------------
 # DB fixture — mirrors pattern used in other test files
 # ---------------------------------------------------------------------------
 @pytest.fixture()
 def rl_db():
+    original_url = str(db.engine.url)
     db.reset_engine("sqlite+pysqlite:///./test_rate_limiting.db")
     db.init_db()
     with db.SessionLocal() as session:
         session.query(User).delete()
         session.commit()
     yield
-    db.reset_engine(ORIGINAL_DATABASE_URL)
+    db.reset_engine(original_url)
 
 
 # ---------------------------------------------------------------------------

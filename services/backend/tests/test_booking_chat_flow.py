@@ -10,11 +10,9 @@ from app.main import BOOKING_SESSION_COOKIE_NAME, app
 from app.models import PendingAction, User
 
 
-ORIGINAL_DATABASE_URL = str(db.engine.url)
-
-
 @pytest.fixture()
 def booking_db():
+    original_url = str(db.engine.url)
     db.reset_engine("sqlite+pysqlite:///./test_booking_chat.db")
     db.init_db()
     with db.SessionLocal() as session:
@@ -22,7 +20,7 @@ def booking_db():
         session.query(User).delete()
         session.commit()
     yield
-    db.reset_engine(ORIGINAL_DATABASE_URL)
+    db.reset_engine(original_url)
 
 
 def _create_user() -> User:

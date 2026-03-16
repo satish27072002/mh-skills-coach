@@ -147,6 +147,12 @@ _rate_limiter = RateLimiter(
 # ---------------------------------------------------------------------------
 _conversation_store: dict[str, list[dict[str, str]]] = {}
 
+# ---------------------------------------------------------------------------
+# Guest mode: track prompt counts per guest session token
+# ---------------------------------------------------------------------------
+_guest_prompt_counts: dict[str, int] = {}
+GUEST_SESSION_COOKIE_NAME = settings.guest_session_cookie_name
+
 
 def _get_session_key(user: Any, request: Any) -> str:
     """Build a stable session key from user ID or session cookie."""
@@ -183,6 +189,30 @@ def _append_to_history(
     history.append({"role": "user", "content": user_message})
     history.append({"role": "assistant", "content": assistant_message})
     _save_history(session_key, history)
+
+
+# ---------------------------------------------------------------------------
+# Guest session helpers
+# ---------------------------------------------------------------------------
+
+def _get_guest_session_token(request: Request) -> str | None:
+    """Return the guest session token from cookie, or None."""
+    token = request.cookies.get(GUEST_SESSION_COOKIE_NAME)
+    if token and token.strip():
+        return token.strip()
+    return None
+
+
+def _get_guest_prompt_count(token: str) -> int:
+    """Return the number of prompts used by a guest session."""
+    return _guest_prompt_counts.get(token, 0)
+
+
+def _increment_guest_prompt_count(token: str) -> int:
+    """Increment and return the guest prompt count."""
+    count = _guest_prompt_counts.get(token, 0) + 1
+    _guest_prompt_counts[token] = count
+    return count
 
 
 def _extract_location(message: str) -> str | None:
@@ -809,9 +839,19 @@ def auth_google_callback(request: Request, db: Session = Depends(get_db)) -> Res
 
 
 @app.get("/me")
-def get_me(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+def get_me(request: Request, response: Response, db: Session = Depends(get_db)) -> dict[str, Any]:
     user = _get_user_from_cookie(db, request)
     if not user:
+        guest_token = _get_guest_session_token(request)
+        if guest_token:
+            used = _get_guest_prompt_count(guest_token)
+            return {
+                "is_guest": True,
+                "is_premium": False,
+                "guest_prompts_used": used,
+                "guest_prompts_limit": settings.guest_prompt_limit,
+                "guest_prompts_remaining": max(0, settings.guest_prompt_limit - used),
+            }
         raise HTTPException(status_code=401, detail="not authenticated")
     return {
         "id": str(user.id),
@@ -819,8 +859,35 @@ def get_me(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
         "email": user.email,
         "name": user.name,
         "is_premium": user.is_premium,
+        "is_guest": False,
         "premium_until": user.premium_until,
     }
+
+
+@app.post("/guest/start")
+def guest_start(request: Request) -> JSONResponse:
+    """Create a guest session with limited prompts."""
+    existing = _get_guest_session_token(request)
+    if existing:
+        used = _get_guest_prompt_count(existing)
+        return JSONResponse(content={
+            "status": "ok",
+            "is_guest": True,
+            "guest_prompts_used": used,
+            "guest_prompts_limit": settings.guest_prompt_limit,
+            "guest_prompts_remaining": max(0, settings.guest_prompt_limit - used),
+        })
+    token = secrets.token_urlsafe(24)
+    _guest_prompt_counts[token] = 0
+    response = JSONResponse(content={
+        "status": "ok",
+        "is_guest": True,
+        "guest_prompts_used": 0,
+        "guest_prompts_limit": settings.guest_prompt_limit,
+        "guest_prompts_remaining": settings.guest_prompt_limit,
+    })
+    _set_cookie(response, GUEST_SESSION_COOKIE_NAME, token, request=request)
+    return response
 
 
 @app.post("/logout")
@@ -868,9 +935,34 @@ def chat(
     user = _get_user_from_cookie(db, request)
     session_key = _get_session_key(user, request)
 
+    # --- Guest mode: enforce prompt limit ---
+    guest_token: str | None = None
+    if not user:
+        guest_token = _get_guest_session_token(request)
+        if guest_token:
+            used = _get_guest_prompt_count(guest_token)
+            if used >= settings.guest_prompt_limit:
+                return ChatResponse(
+                    coach_message=(
+                        f"You've used all {settings.guest_prompt_limit} free guest prompts. "
+                        "Sign in with Google to continue chatting with unlimited access."
+                    ),
+                    risk_level="guest_limit_reached",
+                )
+
+    def _count_guest_prompt(result: ChatResponse) -> ChatResponse:
+        """Increment guest prompt counter and attach remaining info."""
+        if guest_token:
+            count = _increment_guest_prompt_count(guest_token)
+            remaining = max(0, settings.guest_prompt_limit - count)
+            result.guest_prompts_remaining = remaining
+            log_event("guest_prompt_used", count=count, remaining=remaining, correlation_id=correlation_id)
+        return result
+
     # --- Rate limiting ---
     client_key = (
         request.cookies.get(settings.session_cookie_name)
+        or (guest_token if guest_token else None)
         or (request.client.host if request.client else "unknown")
     )
     try:
@@ -896,7 +988,7 @@ def chat(
     if safety_response:
         log_event("safety_trigger", trigger_type="safety_gate", correlation_id=correlation_id)
         _append_to_history(session_key, message, safety_response.coach_message or "")
-        return safety_response
+        return _count_guest_prompt(safety_response)
 
     # --- Jailbreak guardrail ---
     if contains_jailbreak_attempt(message):
@@ -909,7 +1001,7 @@ def chat(
             )
         )
         _append_to_history(session_key, message, jailbreak_response.coach_message or "")
-        return jailbreak_response
+        return _count_guest_prompt(jailbreak_response)
 
     # --- Load conversation history BEFORE scope check so the LLM classifier
     # can use conversation context to make smarter in/out-of-scope decisions ---
@@ -928,7 +1020,7 @@ def chat(
             )
         )
         _append_to_history(session_key, message, out_of_scope_response.coach_message or "")
-        return out_of_scope_response
+        return _count_guest_prompt(out_of_scope_response)
 
     # Note: emotional state messages (anxious, stressed, sad, etc.) are intentionally
     # routed through run_agent() below so the LLM can respond with full conversation
@@ -938,7 +1030,7 @@ def chat(
         log_event("safety_trigger", trigger_type="prescription", correlation_id=correlation_id)
         prescription_response = route_message(message)
         _append_to_history(session_key, message, prescription_response.coach_message or "")
-        return prescription_response
+        return _count_guest_prompt(prescription_response)
 
     router = _build_router()
     route = router.route(
@@ -963,7 +1055,7 @@ def chat(
     if route == "THERAPIST_SEARCH":
         therapist_response = therapist_agent.handle(user=user, request=request, message=message)
         _append_to_history(session_key, message, therapist_response.coach_message or "")
-        return therapist_response
+        return _count_guest_prompt(therapist_response)
 
     if route == "BOOKING_EMAIL":
         if not actor_key:
@@ -979,7 +1071,7 @@ def chat(
         )
         if booking_response:
             _append_to_history(session_key, message, booking_response.coach_message or "")
-            return booking_response
+            return _count_guest_prompt(booking_response)
 
     # --- COACH: pass conversation history for context continuity ---
     with Timer() as t:
@@ -988,7 +1080,7 @@ def chat(
 
     final_response = ChatResponse(**response_json)
     _append_to_history(session_key, message, final_response.coach_message or "")
-    return final_response
+    return _count_guest_prompt(final_response)
 
 
 @app.post("/payments/create-checkout-session", response_model=CheckoutSessionResponse)

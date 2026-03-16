@@ -64,9 +64,6 @@ def _mock_run_agent(message: str, **kwargs):
     }
 
 
-ORIGINAL_DATABASE_URL = str(db.engine.url)
-
-
 def _reset_db() -> None:
     db.reset_engine("sqlite+pysqlite:///./test_crisis_guardrail.db")
     db.init_db()
@@ -78,9 +75,10 @@ def _reset_db() -> None:
 
 @pytest.fixture()
 def crisis_db():
+    original_url = str(db.engine.url)
     _reset_db()
     yield
-    db.reset_engine(ORIGINAL_DATABASE_URL)
+    db.reset_engine(original_url)
 
 
 def test_crisis_response_includes_hotlines_and_therapists(monkeypatch, crisis_db):

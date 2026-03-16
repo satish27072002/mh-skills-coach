@@ -9,9 +9,6 @@ from app.main import app
 from app.models import User
 
 
-ORIGINAL_DATABASE_URL = str(db.engine.url)
-
-
 class DummyResponse:
     def __init__(self, payload, status_code=200):
         self._payload = payload
@@ -23,13 +20,14 @@ class DummyResponse:
 
 @pytest.fixture()
 def test_db():
+    original_url = str(db.engine.url)
     db.reset_engine("sqlite+pysqlite:///./test_therapist_mcp.db")
     db.init_db()
     with db.SessionLocal() as session:
         session.query(User).delete()
         session.commit()
     yield
-    db.reset_engine(ORIGINAL_DATABASE_URL)
+    db.reset_engine(original_url)
 
 
 def _create_user(*, is_premium: bool) -> User:

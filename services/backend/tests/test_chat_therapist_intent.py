@@ -7,9 +7,6 @@ from app.main import app
 from app.models import PendingAction, User
 
 
-ORIGINAL_DATABASE_URL = str(db.engine.url)
-
-
 def _reset_db() -> None:
     db.reset_engine("sqlite+pysqlite:///./test_chat_therapist_intent.db")
     db.init_db()
@@ -21,13 +18,14 @@ def _reset_db() -> None:
 
 @pytest.fixture()
 def therapist_chat_db():
+    original_url = str(db.engine.url)
     _reset_db()
     from app.agents import therapist_agent
 
     therapist_agent.LAST_THERAPIST_LOCATION_BY_SESSION.clear()
     therapist_agent.PENDING_THERAPIST_QUERY_BY_SESSION.clear()
     yield
-    db.reset_engine(ORIGINAL_DATABASE_URL)
+    db.reset_engine(original_url)
     therapist_agent.LAST_THERAPIST_LOCATION_BY_SESSION.clear()
     therapist_agent.PENDING_THERAPIST_QUERY_BY_SESSION.clear()
 

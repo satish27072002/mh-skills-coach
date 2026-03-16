@@ -33,3 +33,12 @@ def _reset_conversation_store():
     _conversation_store.clear()
     yield
     _conversation_store.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_guest_prompt_counts():
+    """Reset guest prompt counts before every test."""
+    from app.main import _guest_prompt_counts
+    _guest_prompt_counts.clear()
+    yield
+    _guest_prompt_counts.clear()

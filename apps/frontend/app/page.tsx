@@ -41,6 +41,8 @@ export default function Home() {
   const [therapistResults, setTherapistResults] = useState<ChatResponse["therapists"]>([]);
   const [therapistError, setTherapistError] = useState<string | null>(null);
   const [therapistLoading, setTherapistLoading] = useState(false);
+  const [isGuest, setIsGuest] = useState(false);
+  const [guestPromptsRemaining, setGuestPromptsRemaining] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -73,8 +75,15 @@ export default function Home() {
         }
         const data = await res.json();
         if (!cancelled) {
-          setIsAuthenticated(true);
-          setPremiumStatus(data.is_premium ? "premium" : "free");
+          if (data.is_guest) {
+            setIsGuest(true);
+            setIsAuthenticated(false);
+            setPremiumStatus("free");
+            setGuestPromptsRemaining(data.guest_prompts_remaining ?? null);
+          } else {
+            setIsAuthenticated(true);
+            setPremiumStatus(data.is_premium ? "premium" : "free");
+          }
           setAuthStatus("ready");
         }
       } catch {
@@ -163,6 +172,9 @@ export default function Home() {
         risk_level: data.risk_level
       };
       setMessages((prev) => [...prev, assistantMsg]);
+      if (isGuest && data.guest_prompts_remaining != null) {
+        setGuestPromptsRemaining(data.guest_prompts_remaining);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Something went wrong";
       const uiMessage = message === "Failed to fetch" ? "Failed to reach the API." : message;
@@ -251,38 +263,56 @@ export default function Home() {
         <>
           <StatusBadge />
           <ThemeToggle />
-          <Button
-            variant={premiumStatus === "premium" ? "default" : "secondary"}
-            size="sm"
-            onClick={() => {
-              if (premiumStatus === "premium") {
-                setTherapistModalOpen(true);
-                setTherapistResults([]);
-                setTherapistError(null);
-              } else {
-                startCheckout();
-              }
-            }}
-            disabled={checkoutLoading || premiumStatus === "unknown"}
-          >
-            <Search className="h-4 w-4" />
-            {premiumStatus === "premium" ? "Find a therapist" : "Get Premium to find a therapist"}
-          </Button>
-          {premiumStatus === "premium" ? (
-            <Badge variant="success">Premium Active</Badge>
-          ) : (
+          {isGuest && guestPromptsRemaining != null ? (
+            <Badge variant={guestPromptsRemaining <= 3 ? "destructive" : "secondary"}>
+              {guestPromptsRemaining} prompt{guestPromptsRemaining !== 1 ? "s" : ""} left
+            </Badge>
+          ) : null}
+          {isGuest ? (
             <Button
               variant="default"
               size="sm"
-              onClick={startCheckout}
-              disabled={checkoutLoading || premiumStatus === "unknown"}
+              onClick={() => router.push("/login")}
             >
-              {checkoutLoading ? "Opening..." : premiumStatus === "unknown" ? "Checking..." : "Get Premium"}
+              Sign in with Google
             </Button>
+          ) : (
+            <>
+              <Button
+                variant={premiumStatus === "premium" ? "default" : "secondary"}
+                size="sm"
+                onClick={() => {
+                  if (premiumStatus === "premium") {
+                    setTherapistModalOpen(true);
+                    setTherapistResults([]);
+                    setTherapistError(null);
+                  } else {
+                    startCheckout();
+                  }
+                }}
+                disabled={checkoutLoading || premiumStatus === "unknown"}
+              >
+                <Search className="h-4 w-4" />
+                {premiumStatus === "premium" ? "Find a therapist" : "Get Premium to find a therapist"}
+              </Button>
+              {premiumStatus === "premium" ? (
+                <Badge variant="success">Premium Active</Badge>
+              ) : (
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={startCheckout}
+                  disabled={checkoutLoading || premiumStatus === "unknown"}
+                >
+                  {checkoutLoading ? "Opening..." : premiumStatus === "unknown" ? "Checking..." : "Get Premium"}
+                </Button>
+              )}
+            </>
           )}
           <UserMenu
             isAuthenticated={isAuthenticated}
             isPremium={premiumStatus === "premium"}
+            isGuest={isGuest}
             onUpgrade={startCheckout}
           />
         </>
@@ -291,6 +321,17 @@ export default function Home() {
       {error ? (
         <Card className="mb-4 border-red-200 bg-red-50 dark:border-red-900/70 dark:bg-red-950/30">
           <CardContent className="p-3 text-sm text-red-700 dark:text-red-300">{error}</CardContent>
+        </Card>
+      ) : null}
+
+      {isGuest && guestPromptsRemaining === 0 ? (
+        <Card className="mb-4 border-amber-200 bg-amber-50 dark:border-amber-900/70 dark:bg-amber-950/30">
+          <CardContent className="flex items-center justify-between p-3 text-sm text-amber-800 dark:text-amber-200">
+            <span>You&apos;ve used all your free guest prompts. Sign in for unlimited access.</span>
+            <Button size="sm" variant="default" onClick={() => router.push("/login")}>
+              Sign in
+            </Button>
+          </CardContent>
         </Card>
       ) : null}
 
@@ -334,11 +375,16 @@ export default function Home() {
               }}
               rows={3}
               className="resize-none"
-              placeholder="I feel anxious right now..."
+              placeholder={isGuest && guestPromptsRemaining === 0 ? "Guest limit reached — sign in for unlimited access" : "I feel anxious right now..."}
+              disabled={isGuest && guestPromptsRemaining === 0}
             />
             <div className="flex items-center justify-between gap-3">
-              <span className="text-xs text-muted-foreground">Enter to send, Shift+Enter for newline</span>
-              <Button onClick={handleSend} disabled={isSending || !input.trim()}>
+              <span className="text-xs text-muted-foreground">
+                {isGuest && guestPromptsRemaining != null
+                  ? `${guestPromptsRemaining} prompt${guestPromptsRemaining !== 1 ? "s" : ""} remaining · Enter to send`
+                  : "Enter to send, Shift+Enter for newline"}
+              </span>
+              <Button onClick={handleSend} disabled={isSending || !input.trim() || (isGuest && guestPromptsRemaining === 0)}>
                 {isSending ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />

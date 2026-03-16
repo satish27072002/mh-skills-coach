@@ -55,5 +55,9 @@ class Settings(BaseSettings):
     # Conversation memory
     conversation_history_max_turns: int = 10  # max user+assistant turn pairs kept per session
 
+    # Guest mode
+    guest_session_cookie_name: str = "mh_guest_session"
+    guest_prompt_limit: int = 15
+
 
 settings = Settings()
