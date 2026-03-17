@@ -42,7 +42,7 @@ export default function LoginClient() {
         <div className="max-w-md space-y-8">
           <div>
             <h1 className="font-display text-4xl font-bold tracking-tight sm:text-5xl">
-              MH Skills Coach
+              Mental Health Skills Coach
             </h1>
             <p className="mt-4 text-lg leading-relaxed text-foreground/70">
               Practice evidence-based coping skills, discover nearby therapists,

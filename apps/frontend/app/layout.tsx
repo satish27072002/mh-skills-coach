@@ -4,8 +4,8 @@ import { Toaster } from "sonner";
 import "./globals.css";
 
 export const metadata = {
-  title: "Skills Coach",
-  description: "Mental health skills coach demo"
+  title: "Mental Health Skills Coach",
+  description: "AI-powered mental health coping skills coach"
 };
 
 const inter = Inter({

@@ -33,8 +33,8 @@
 :root {
   color-scheme: light;
   --background: #f8f7ff;
-  --foreground: #1e1b4b;
-  --muted-foreground: #5b5891;
+  --foreground: #111111;
+  --muted-foreground: #64618a;
   --card: #ffffff;
   --border: #d4d0f0;
   --primary: #6366f1;
@@ -46,20 +46,20 @@
   --user-bubble: #6366f1;
   --user-bubble-text: #ffffff;
 
-  /* Mesh blob colors — soft pastel for light mode */
-  --blob-purple: rgba(139, 92, 246, 0.28);
-  --blob-blue: rgba(99, 102, 241, 0.22);
-  --blob-indigo: rgba(79, 70, 229, 0.18);
-  --blob-lavender: rgba(167, 139, 250, 0.12);
-  --blob-rose: rgba(196, 130, 246, 0.10);
+  /* Mesh blob colors — dramatic for light mode */
+  --blob-purple: rgba(139, 92, 246, 0.38);
+  --blob-blue: rgba(99, 102, 241, 0.32);
+  --blob-indigo: rgba(79, 70, 229, 0.26);
+  --blob-lavender: rgba(167, 139, 250, 0.20);
+  --blob-rose: rgba(196, 130, 246, 0.16);
 }
 
 /* ─── Dark palette: deep indigo & midnight ─── */
 .dark {
   color-scheme: dark;
   --background: #0a0a12;
-  --foreground: #e8e5ff;
-  --muted-foreground: #b0acd4;
+  --foreground: #f5f5f5;
+  --muted-foreground: #a8a4cc;
   --card: #151525;
   --border: #2a2850;
   --primary: #818cf8;
@@ -69,14 +69,14 @@
   --warning: #facc15;
   --sidebar: #0a0a0f;
   --user-bubble: #4f46e5;
-  --user-bubble-text: #e8e5ff;
+  --user-bubble-text: #f5f5f5;
 
-  /* Mesh blob colors — richer for dark mode */
-  --blob-purple: rgba(139, 92, 246, 0.40);
-  --blob-blue: rgba(99, 102, 241, 0.35);
-  --blob-indigo: rgba(79, 70, 229, 0.28);
-  --blob-lavender: rgba(167, 139, 250, 0.15);
-  --blob-rose: rgba(196, 130, 246, 0.12);
+  /* Mesh blob colors — rich & dramatic for dark mode */
+  --blob-purple: rgba(139, 92, 246, 0.50);
+  --blob-blue: rgba(99, 102, 241, 0.45);
+  --blob-indigo: rgba(79, 70, 229, 0.38);
+  --blob-lavender: rgba(167, 139, 250, 0.22);
+  --blob-rose: rgba(196, 130, 246, 0.18);
 }
 
 * {
@@ -100,17 +100,17 @@ body::before {
   pointer-events: none;
   background:
     /* Large purple blob — bottom-left */
-    radial-gradient(circle 650px at 10% 90%, var(--blob-purple), transparent 70%),
+    radial-gradient(circle 700px at 10% 90%, var(--blob-purple), transparent 70%),
     /* Blue blob — bottom-center */
-    radial-gradient(circle 550px at 50% 95%, var(--blob-blue), transparent 70%),
+    radial-gradient(circle 620px at 50% 95%, var(--blob-blue), transparent 70%),
     /* Indigo blob — bottom-right */
-    radial-gradient(circle 600px at 90% 85%, var(--blob-indigo), transparent 70%),
+    radial-gradient(circle 660px at 90% 85%, var(--blob-indigo), transparent 70%),
     /* Lavender haze — mid-left, bleeds upward */
-    radial-gradient(circle 450px at 20% 65%, var(--blob-lavender), transparent 70%),
-    /* Rose accent — mid-right, subtle */
-    radial-gradient(circle 400px at 75% 70%, var(--blob-rose), transparent 70%),
+    radial-gradient(circle 500px at 20% 60%, var(--blob-lavender), transparent 70%),
+    /* Rose accent — mid-right */
+    radial-gradient(circle 480px at 78% 65%, var(--blob-rose), transparent 70%),
     /* Fade to clean background at top */
-    linear-gradient(to top, transparent 50%, var(--background) 90%);
+    linear-gradient(to top, transparent 55%, var(--background) 90%);
   filter: blur(80px);
   animation: blobRise 1.4s ease-out forwards;
 }

@@ -64,7 +64,7 @@ function SidebarThemeToggle() {
     <Button
       variant="ghost"
       onClick={toggle}
-      className="w-full justify-start gap-3 rounded-lg bg-foreground/[0.04] px-3 py-2.5 text-sm font-medium text-foreground/80 hover:bg-foreground/[0.08] hover:text-foreground"
+      className="w-full justify-start gap-3 rounded-lg bg-foreground/[0.04] px-3 py-2.5 text-sm font-medium text-foreground hover:bg-foreground/[0.08]"
     >
       {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
       {isDark ? "Light mode" : "Dark mode"}
@@ -309,7 +309,7 @@ export default function Home() {
         }}
         rows={1}
         className="min-h-[44px] flex-1 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
-        placeholder="Message MH Skills Coach..."
+        placeholder="Message Mental Health Skills Coach..."
         disabled={isGuestLimitReached}
       />
       <Button
@@ -336,7 +336,7 @@ export default function Home() {
     return (
       <main className="flex min-h-screen items-center justify-center px-4">
         <Card className="w-full max-w-md p-8">
-          <h2 className="font-display text-xl font-semibold">MH Skills Coach</h2>
+          <h2 className="font-display text-xl font-semibold">Mental Health Skills Coach</h2>
           <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             Checking session...
@@ -351,7 +351,7 @@ export default function Home() {
     <div className="flex flex-1 flex-col">
       {/* Brand */}
       <div className="border-b px-5 py-5">
-        <h1 className="font-display text-lg font-bold tracking-tight">MH Skills Coach</h1>
+        <h1 className="font-display text-lg font-bold tracking-tight">Mental Health Skills Coach</h1>
         <p className="mt-1 text-xs text-muted-foreground">Coping skills &amp; therapist discovery</p>
       </div>
 
@@ -360,7 +360,7 @@ export default function Home() {
         <Button
           variant="ghost"
           onClick={handleNewChat}
-          className="w-full justify-start gap-3 rounded-lg bg-foreground/[0.04] px-3 py-2.5 text-sm font-medium text-foreground/80 hover:bg-foreground/[0.08] hover:text-foreground"
+          className="w-full justify-start gap-3 rounded-lg bg-foreground/[0.04] px-3 py-2.5 text-sm font-medium text-foreground hover:bg-foreground/[0.08]"
         >
           <MessageSquarePlus className="h-4 w-4" />
           New chat
@@ -380,7 +380,7 @@ export default function Home() {
             }
           }}
           disabled={checkoutLoading || premiumStatus === "unknown"}
-          className="w-full justify-start gap-3 rounded-lg bg-foreground/[0.04] px-3 py-2.5 text-sm font-medium text-foreground/80 hover:bg-foreground/[0.08] hover:text-foreground"
+          className="w-full justify-start gap-3 rounded-lg bg-foreground/[0.04] px-3 py-2.5 text-sm font-medium text-foreground hover:bg-foreground/[0.08]"
         >
           <Search className="h-4 w-4" />
           Find a therapist
@@ -397,7 +397,7 @@ export default function Home() {
           <Button
             variant="ghost"
             onClick={() => router.push("/login")}
-            className="w-full justify-start gap-3 rounded-lg bg-foreground/[0.04] px-3 py-2.5 text-sm font-medium text-foreground/80 hover:bg-foreground/[0.08] hover:text-foreground"
+            className="w-full justify-start gap-3 rounded-lg bg-foreground/[0.04] px-3 py-2.5 text-sm font-medium text-foreground hover:bg-foreground/[0.08]"
           >
             Sign in with Google
           </Button>
@@ -406,7 +406,7 @@ export default function Home() {
             variant="ghost"
             onClick={startCheckout}
             disabled={checkoutLoading || premiumStatus === "unknown"}
-            className="w-full justify-start gap-3 rounded-lg bg-foreground/[0.04] px-3 py-2.5 text-sm font-medium text-foreground/80 hover:bg-foreground/[0.08] hover:text-foreground"
+            className="w-full justify-start gap-3 rounded-lg bg-foreground/[0.04] px-3 py-2.5 text-sm font-medium text-foreground hover:bg-foreground/[0.08]"
           >
             {checkoutLoading ? "Opening..." : "Get Premium"}
           </Button>
