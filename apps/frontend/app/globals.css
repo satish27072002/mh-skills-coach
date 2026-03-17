@@ -19,12 +19,14 @@
   --color-danger: var(--danger);
   --color-warning: var(--warning);
   --color-sidebar: var(--sidebar);
+  --color-user-bubble: var(--user-bubble);
+  --color-user-bubble-text: var(--user-bubble-text);
 
-  --radius-xs: 0;
-  --radius-sm: 0;
-  --radius-md: 0;
-  --radius-lg: 0;
-  --radius-xl: 0;
+  --radius-xs: 0.25rem;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
 }
 
 /* ─── Calming light palette: soft sage & warm neutrals ─── */
@@ -41,6 +43,12 @@
   --danger: #b91c1c;
   --warning: #b45309;
   --sidebar: #ffffff;
+  --user-bubble: #4a7c59;
+  --user-bubble-text: #ffffff;
+  --gradient-start: #ffffff;
+  --gradient-mid: #edf2eb;
+  --gradient-end: #c5ddd0;
+  --gradient-radial: rgba(91, 154, 139, 0.12);
 }
 
 /* ─── Dark palette: deep forest ─── */
@@ -57,6 +65,12 @@
   --danger: #fda4af;
   --warning: #facc15;
   --sidebar: #0a0a0a;
+  --user-bubble: #3a6b4a;
+  --user-bubble-text: #e8f0e8;
+  --gradient-start: #0a0a0a;
+  --gradient-mid: #111a13;
+  --gradient-end: #1a3028;
+  --gradient-radial: rgba(91, 154, 139, 0.08);
 }
 
 * {
@@ -65,11 +79,27 @@
 
 body {
   min-height: 100vh;
-  background: var(--background);
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 100%, var(--gradient-radial), transparent),
+    linear-gradient(180deg, var(--gradient-start) 0%, var(--gradient-mid) 45%, var(--gradient-end) 100%);
+  background-attachment: fixed;
   color: var(--foreground);
   font-family: var(--font-sans);
 }
 
 a {
   color: inherit;
+}
+
+/* ─── Glass panel for floating input bars ─── */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.82);
+  background: color-mix(in srgb, var(--card) 82%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.dark .glass-panel {
+  background: rgba(28, 38, 28, 0.75);
+  background: color-mix(in srgb, var(--card) 75%, transparent);
 }

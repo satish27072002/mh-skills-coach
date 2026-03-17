@@ -46,7 +46,7 @@ export default function ChatBubble({
   return (
     <div className="flex justify-start">
       <div
-        className={`max-w-[92%] space-y-3 border px-4 py-3 text-sm shadow-sm sm:max-w-[80%] ${
+        className={`max-w-[92%] space-y-3 rounded-2xl border px-4 py-3 text-sm shadow-sm sm:max-w-[80%] ${
           isUser
             ? "border-primary bg-primary text-[color:var(--background)]"
             : isCrisis
@@ -104,7 +104,7 @@ export default function ChatBubble({
               {message.therapists.map((therapist) => {
                 const link = therapist.source_url || therapist.url;
                 return (
-                  <li key={`${therapist.name}-${therapist.address}`} className="border bg-card p-3 text-foreground">
+                  <li key={`${therapist.name}-${therapist.address}`} className="rounded-lg border bg-card p-3 text-foreground">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="font-semibold">{therapist.name}</p>
                       <Badge variant="outline">{therapist.distance_km} km</Badge>
@@ -132,7 +132,7 @@ export default function ChatBubble({
 
         {/* Sources */}
         {message.sources && message.sources.length > 0 ? (
-          <details className="border bg-card p-2 text-foreground">
+          <details className="rounded-lg border bg-card p-2 text-foreground">
             <summary className="cursor-pointer text-xs font-semibold">Sources</summary>
             <ul className="space-y-2 pt-2 text-xs">
               {message.sources.map((source, idx) => (

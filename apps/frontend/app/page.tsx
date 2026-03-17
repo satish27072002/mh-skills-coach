@@ -12,6 +12,7 @@ import UserMenu from "../components/user-menu";
 import type { ChatResponse, Message } from "../components/chat-types";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { Card } from "../components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -21,6 +22,10 @@ import {
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
+
+/* ────────────────────────────────────────────────────── */
+/*  Theme toggle (sidebar variant)                        */
+/* ────────────────────────────────────────────────────── */
 
 type Theme = "light" | "dark";
 
@@ -56,15 +61,20 @@ function SidebarThemeToggle() {
 
   const isDark = theme === "dark";
   return (
-    <button
+    <Button
+      variant="ghost"
       onClick={toggle}
-      className="flex w-full items-center gap-3 px-4 py-2 text-sm text-muted-foreground hover:bg-accent/10 hover:text-foreground"
+      className="w-full justify-start gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground"
     >
       {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
       {isDark ? "Light mode" : "Dark mode"}
-    </button>
+    </Button>
   );
 }
+
+/* ────────────────────────────────────────────────────── */
+/*  Constants                                             */
+/* ────────────────────────────────────────────────────── */
 
 const STARTER_PROMPTS = [
   "I feel anxious right now",
@@ -72,6 +82,10 @@ const STARTER_PROMPTS = [
   "I need to talk about stress at work",
   "How can I improve my sleep?",
 ];
+
+/* ────────────────────────────────────────────────────── */
+/*  Main page component                                   */
+/* ────────────────────────────────────────────────────── */
 
 export default function Home() {
   const router = useRouter();
@@ -92,6 +106,9 @@ export default function Home() {
   const [therapistError, setTherapistError] = useState<string | null>(null);
   const [therapistLoading, setTherapistLoading] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const isGuestLimitReached = isGuest && guestPromptsRemaining != null && guestPromptsRemaining <= 0;
 
   /* Auto-scroll to bottom on new messages */
   useEffect(() => {
@@ -145,6 +162,8 @@ export default function Home() {
     loadMe();
     return () => { cancelled = true; };
   }, [router]);
+
+  /* ── Actions ── */
 
   const startCheckout = async () => {
     if (!isAuthenticated) {
@@ -274,40 +293,81 @@ export default function Home() {
     }
   };
 
+  /* ── Shared input bar renderer ── */
+
+  const renderInputBar = () => (
+    <div className="glass-panel flex items-end gap-2 rounded-2xl border px-4 py-3 shadow-lg">
+      <Textarea
+        ref={textareaRef}
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            handleSend();
+          }
+        }}
+        rows={1}
+        className="min-h-[44px] flex-1 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
+        placeholder="Message MH Skills Coach..."
+        disabled={isGuestLimitReached}
+      />
+      <Button
+        onClick={handleSend}
+        disabled={isSending || !input.trim() || isGuestLimitReached}
+        size="icon"
+        className="h-10 w-10 shrink-0 rounded-xl"
+      >
+        {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
+      </Button>
+    </div>
+  );
+
+  const renderInputHint = () => (
+    <p className="mt-2 text-center text-xs text-muted-foreground">
+      {isGuest && guestPromptsRemaining != null
+        ? `${guestPromptsRemaining} prompt${guestPromptsRemaining !== 1 ? "s" : ""} remaining`
+        : "Not medical advice. If in danger, contact emergency services."}
+    </p>
+  );
+
   /* ── Loading state ── */
   if (authStatus === "loading") {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-background px-4">
-        <div className="w-full max-w-md border bg-card p-6 shadow-sm">
-          <h2 className="font-display text-xl font-semibold">Mental Health Skills Coach</h2>
+      <main className="flex min-h-screen items-center justify-center px-4">
+        <Card className="w-full max-w-md p-8">
+          <h2 className="font-display text-xl font-semibold">MH Skills Coach</h2>
           <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             Checking session...
           </div>
-        </div>
+        </Card>
       </main>
     );
   }
 
+  /* ── Sidebar content ── */
   const sidebarContent = (
     <div className="flex flex-1 flex-col">
       {/* Brand */}
-      <div className="border-b px-4 py-4">
-        <h1 className="font-display text-base font-semibold">MH Skills Coach</h1>
-        <p className="mt-0.5 text-xs text-muted-foreground">Coping skills &amp; therapist discovery</p>
+      <div className="border-b px-5 py-5">
+        <h1 className="font-display text-lg font-bold tracking-tight">MH Skills Coach</h1>
+        <p className="mt-1 text-xs text-muted-foreground">Coping skills &amp; therapist discovery</p>
       </div>
 
       {/* Actions */}
-      <div className="flex-1 space-y-1 px-2 py-3">
-        <button
+      <div className="flex-1 space-y-1 px-3 py-4">
+        <Button
+          variant="ghost"
           onClick={handleNewChat}
-          className="flex w-full items-center gap-3 px-4 py-2 text-sm text-muted-foreground hover:bg-accent/10 hover:text-foreground"
+          className="w-full justify-start gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground"
         >
           <MessageSquarePlus className="h-4 w-4" />
           New chat
-        </button>
+        </Button>
 
-        <button
+        <Button
+          variant="ghost"
           onClick={() => {
             if (premiumStatus === "premium") {
               setTherapistModalOpen(true);
@@ -320,50 +380,58 @@ export default function Home() {
             }
           }}
           disabled={checkoutLoading || premiumStatus === "unknown"}
-          className="flex w-full items-center gap-3 px-4 py-2 text-sm text-muted-foreground hover:bg-accent/10 hover:text-foreground disabled:opacity-50"
+          className="w-full justify-start gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground"
         >
           <Search className="h-4 w-4" />
-          {premiumStatus === "premium" ? "Find a therapist" : "Find a therapist (Premium)"}
-        </button>
+          Find a therapist
+          {premiumStatus !== "premium" && (
+            <Badge variant="secondary" className="ml-auto text-[10px]">Premium</Badge>
+          )}
+        </Button>
 
         {premiumStatus === "premium" ? (
-          <div className="px-4 py-2">
+          <div className="px-3 py-2">
             <Badge variant="success">Premium Active</Badge>
           </div>
         ) : isGuest ? (
-          <button
+          <Button
+            variant="ghost"
             onClick={() => router.push("/login")}
-            className="flex w-full items-center gap-3 px-4 py-2 text-sm text-muted-foreground hover:bg-accent/10 hover:text-foreground"
+            className="w-full justify-start gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground"
           >
             Sign in with Google
-          </button>
+          </Button>
         ) : (
-          <button
+          <Button
+            variant="ghost"
             onClick={startCheckout}
             disabled={checkoutLoading || premiumStatus === "unknown"}
-            className="flex w-full items-center gap-3 px-4 py-2 text-sm text-muted-foreground hover:bg-accent/10 hover:text-foreground disabled:opacity-50"
+            className="w-full justify-start gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground"
           >
             {checkoutLoading ? "Opening..." : "Get Premium"}
-          </button>
+          </Button>
         )}
 
         <SidebarThemeToggle />
-
-        <div className="px-4 py-2">
-          <StatusBadge />
-        </div>
       </div>
 
       {/* Bottom section */}
-      <div className="border-t px-2 py-3 space-y-1">
+      <div className="border-t px-3 py-4 space-y-3">
         {isGuest && guestPromptsRemaining != null && (
-          <div className="px-4 py-1">
-            <Badge variant={guestPromptsRemaining > 5 ? "secondary" : guestPromptsRemaining > 0 ? "warning" : "destructive"}>
+          <div className="px-3">
+            <Badge
+              variant={guestPromptsRemaining > 5 ? "secondary" : guestPromptsRemaining > 0 ? "warning" : "destructive"}
+            >
               {guestPromptsRemaining} prompt{guestPromptsRemaining !== 1 ? "s" : ""} left
             </Badge>
           </div>
         )}
-        <div className="px-2">
+
+        <div className="px-1">
+          <StatusBadge />
+        </div>
+
+        <div className="px-1">
           <UserMenu
             isAuthenticated={isAuthenticated}
             isPremium={premiumStatus === "premium"}
@@ -375,104 +443,97 @@ export default function Home() {
     </div>
   );
 
+  /* ── Main render ── */
   return (
     <AppShell sidebar={sidebarContent}>
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="relative flex flex-1 flex-col overflow-hidden">
         {/* Error banner */}
         {error && (
-          <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-300">
+          <div className="border-b border-red-200 bg-red-50/90 px-4 py-2 text-sm text-red-700 backdrop-blur-sm dark:border-red-900/70 dark:bg-red-950/40 dark:text-red-300">
             {error}
           </div>
         )}
 
-        {/* Chat messages area */}
-        <div ref={listRef} className="flex-1 overflow-y-auto px-4 py-6">
-          {messages.length === 0 ? (
-            <div className="mx-auto flex h-full max-w-2xl flex-col items-center justify-center text-center">
-              <h2 className="font-display text-2xl font-semibold">How are you feeling today?</h2>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Share how you are feeling, and I will suggest a grounded next step.
-              </p>
-              <div className="mt-6 grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
+        {messages.length === 0 ? (
+          /* ═══ EMPTY STATE: centered layout ═══ */
+          <div className="flex flex-1 flex-col items-center justify-center px-4 pb-8">
+            <div className="w-full max-w-2xl space-y-8 text-center">
+              {/* Greeting */}
+              <div>
+                <h2 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">
+                  How are you feeling today?
+                </h2>
+                <p className="mt-3 text-base text-muted-foreground">
+                  Share how you are feeling, and I&apos;ll suggest a grounded next step.
+                </p>
+              </div>
+
+              {/* Starter prompts */}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 {STARTER_PROMPTS.map((prompt) => (
                   <button
                     key={prompt}
                     onClick={() => sendMessage(prompt)}
-                    className="border bg-card px-4 py-3 text-left text-sm text-foreground hover:bg-accent/10"
+                    className="group rounded-xl border bg-card/60 px-4 py-3.5 text-left text-sm text-foreground backdrop-blur-sm transition-all hover:bg-card hover:shadow-md"
                   >
                     {prompt}
                   </button>
                 ))}
               </div>
+
+              {/* Input bar (centered) */}
+              <div className="mx-auto w-full max-w-2xl">
+                {renderInputBar()}
+                {renderInputHint()}
+              </div>
             </div>
-          ) : (
-            <div className="mx-auto max-w-3xl space-y-4">
-              {messages.map((msg) => (
-                <ChatBubble
-                  key={msg.id}
-                  message={msg}
-                  onBookingAction={handleBookingAction}
-                  bookingActionDisabled={isSending}
-                />
-              ))}
-              {isSending && (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Thinking...
+          </div>
+        ) : (
+          /* ═══ CHAT STATE: messages + floating bottom input ═══ */
+          <>
+            {/* Scrollable messages */}
+            <div ref={listRef} className="flex-1 overflow-y-auto px-4 py-6">
+              <div className="mx-auto max-w-3xl space-y-4">
+                {messages.map((msg) => (
+                  <ChatBubble
+                    key={msg.id}
+                    message={msg}
+                    onBookingAction={handleBookingAction}
+                    bookingActionDisabled={isSending}
+                  />
+                ))}
+                {isSending && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Thinking...
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Guest limit banner */}
+            {isGuestLimitReached && (
+              <div className="border-t border-amber-200 bg-amber-50/90 px-4 py-3 backdrop-blur-sm dark:border-amber-900/70 dark:bg-amber-950/40">
+                <div className="mx-auto flex max-w-3xl items-center justify-between gap-3">
+                  <p className="text-sm text-amber-800 dark:text-amber-200">
+                    You have used all 15 guest prompts. Sign in for unlimited access.
+                  </p>
+                  <Button size="sm" onClick={() => router.push("/login")}>
+                    Sign in
+                  </Button>
                 </div>
-              )}
-            </div>
-          )}
-        </div>
+              </div>
+            )}
 
-        {/* Guest limit banner */}
-        {isGuest && guestPromptsRemaining != null && guestPromptsRemaining <= 0 && (
-          <div className="border-t border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-900/70 dark:bg-amber-950/30">
-            <div className="mx-auto flex max-w-3xl items-center justify-between gap-3">
-              <p className="text-sm text-amber-800 dark:text-amber-200">
-                You have used all 15 guest prompts. Sign in for unlimited access.
-              </p>
-              <Button size="sm" onClick={() => router.push("/login")}>
-                Sign in
-              </Button>
+            {/* Floating input at bottom */}
+            <div className="px-4 pb-4 pt-2">
+              <div className="mx-auto max-w-3xl">
+                {renderInputBar()}
+                {renderInputHint()}
+              </div>
             </div>
-          </div>
+          </>
         )}
-
-        {/* Input area */}
-        <div className="border-t bg-card px-4 py-3">
-          <div className="mx-auto max-w-3xl">
-            <div className="flex items-end gap-2">
-              <Textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    handleSend();
-                  }
-                }}
-                rows={1}
-                className="min-h-[44px] flex-1 resize-none"
-                placeholder="Message MH Skills Coach..."
-                disabled={isGuest && guestPromptsRemaining != null && guestPromptsRemaining <= 0}
-              />
-              <Button
-                onClick={handleSend}
-                disabled={isSending || !input.trim() || (isGuest && guestPromptsRemaining != null && guestPromptsRemaining <= 0)}
-                size="icon"
-                className="h-[44px] w-[44px] shrink-0"
-              >
-                {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
-              </Button>
-            </div>
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              {isGuest && guestPromptsRemaining != null
-                ? `${guestPromptsRemaining} prompt${guestPromptsRemaining !== 1 ? "s" : ""} remaining`
-                : "Not medical advice. If in danger, contact emergency services."}
-            </p>
-          </div>
-        </div>
       </div>
 
       {/* Therapist search modal */}
@@ -497,7 +558,7 @@ export default function Home() {
             </div>
 
             {therapistError && (
-              <div className="border border-red-200 bg-red-50 p-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+              <div className="rounded-lg border border-red-200 bg-red-50 p-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
                 {therapistError}
               </div>
             )}
@@ -528,7 +589,7 @@ export default function Home() {
                   {therapistResults.map((therapist) => {
                     const link = therapist.source_url || therapist.url;
                     return (
-                      <li key={`${therapist.name}-${therapist.address}`} className="border p-3">
+                      <li key={`${therapist.name}-${therapist.address}`} className="rounded-lg border p-3">
                         {link ? (
                           <a className="font-semibold text-primary underline underline-offset-2" href={link} target="_blank" rel="noreferrer">
                             {therapist.name}

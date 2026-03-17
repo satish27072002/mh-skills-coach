@@ -48,7 +48,7 @@ export default function StatusBadge({ fetcher = fetch }: { fetcher?: typeof fetc
 
   if (status.backend === "offline") {
     return (
-      <div className="bg-red-100 px-4 py-2 text-xs font-semibold text-red-700 dark:bg-red-950/40 dark:text-red-300">
+      <div className="rounded-lg bg-red-100 px-4 py-2 text-xs font-semibold text-red-700 dark:bg-red-950/40 dark:text-red-300">
         API: offline
       </div>
     );
@@ -62,7 +62,7 @@ export default function StatusBadge({ fetcher = fetch }: { fetcher?: typeof fetc
         Mode: {status.mode === "llm_rag" ? "LLM+RAG" : "Deterministic"}
       </Badge>
       {status.model && (
-        <span className="border px-3 py-1 text-foreground">Model: {status.model}</span>
+        <span className="rounded-md border px-3 py-1 text-foreground">Model: {status.model}</span>
       )}
     </div>
   );
