@@ -13,7 +13,7 @@ export async function POST(request: Request) {
     headers.cookie = cookieHeader;
   }
   try {
-    const backendRes = await fetch(`${getBackendBaseUrl()}/guest`, {
+    const backendRes = await fetch(`${getBackendBaseUrl()}/guest/start`, {
       method: "POST",
       headers,
       cache: "no-store"

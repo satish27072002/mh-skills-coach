@@ -1,10 +1,30 @@
-"""Tests for guest mode: session creation, prompt counting, and limit enforcement."""
-
 import pytest
 from fastapi.testclient import TestClient
 
+from app import db
 from app.config import settings
 from app.main import app, _guest_prompt_counts, GUEST_SESSION_COOKIE_NAME
+from app.models import User
+
+
+ORIGINAL_DATABASE_URL = str(db.engine.url)
+
+
+def _reset_db() -> None:
+    db.reset_engine("sqlite+pysqlite:///./test_guest_mode.db")
+    db.init_db()
+    with db.SessionLocal() as session:
+        session.query(User).delete()
+        session.commit()
+
+
+@pytest.fixture()
+def guest_db():
+    _reset_db()
+    _guest_prompt_counts.clear()
+    yield
+    db.reset_engine(ORIGINAL_DATABASE_URL)
+    _guest_prompt_counts.clear()
 
 
 def _mock_run_agent(message: str, **kwargs):
@@ -25,7 +45,7 @@ def _mock_run_agent(message: str, **kwargs):
     }
 
 
-def test_guest_start_creates_session():
+def test_guest_start_creates_session(guest_db):
     """POST /guest should create a guest session and return cookie."""
     client = TestClient(app)
     response = client.post("/guest")
@@ -39,21 +59,24 @@ def test_guest_start_creates_session():
     assert GUEST_SESSION_COOKIE_NAME in response.cookies
 
 
-def test_guest_start_reuses_existing_session():
+def test_guest_start_reuses_existing_session(guest_db):
     """Calling /guest again should reuse the same session."""
     client = TestClient(app)
     r1 = client.post("/guest")
     assert r1.status_code == 200
-    # Call again — client automatically sends cookie back
+    token = r1.cookies[GUEST_SESSION_COOKIE_NAME]
+    # Call again with existing cookie
     r2 = client.post("/guest")
     assert r2.status_code == 200
     assert r2.json()["guest_prompts_used"] == 0
 
 
-def test_me_returns_guest_info():
+def test_me_returns_guest_info(guest_db):
     """GET /me with a guest session should return guest info, not 401."""
     client = TestClient(app)
+    # Start guest session first
     client.post("/guest")
+    # Now /me should return guest info
     response = client.get("/me")
     assert response.status_code == 200
     payload = response.json()
@@ -62,14 +85,14 @@ def test_me_returns_guest_info():
     assert payload["guest_prompts_remaining"] == settings.guest_prompt_limit
 
 
-def test_me_returns_401_without_any_session():
+def test_me_returns_401_without_any_session(guest_db):
     """GET /me without any session cookie should return 401."""
     client = TestClient(app, cookies={})
     response = client.get("/me")
     assert response.status_code == 401
 
 
-def test_guest_chat_counts_prompts(monkeypatch):
+def test_guest_chat_counts_prompts(monkeypatch, guest_db):
     """Guest chat messages should decrement the remaining prompt count."""
     monkeypatch.setattr("app.main.run_agent", _mock_run_agent)
     client = TestClient(app)
@@ -81,7 +104,7 @@ def test_guest_chat_counts_prompts(monkeypatch):
     assert payload.get("guest_prompts_remaining") == settings.guest_prompt_limit - 1
 
 
-def test_guest_chat_enforces_limit(monkeypatch):
+def test_guest_chat_enforces_limit(monkeypatch, guest_db):
     """After guest_prompt_limit prompts, further messages should be rejected."""
     monkeypatch.setattr("app.main.run_agent", _mock_run_agent)
     original_limit = settings.guest_prompt_limit
@@ -104,24 +127,20 @@ def test_guest_chat_enforces_limit(monkeypatch):
         settings.guest_prompt_limit = original_limit
 
 
-def test_authenticated_user_not_affected_by_guest_limit(monkeypatch):
+def test_authenticated_user_not_affected_by_guest_limit(monkeypatch, guest_db):
     """Authenticated users should not be limited by guest prompt count."""
     monkeypatch.setattr("app.main.run_agent", _mock_run_agent)
 
-    from app import db
-    from app.models import User
-
-    db.init_db()
     with db.SessionLocal() as session:
-        user = User(email="guest_test@example.com", name="Guest Test User")
+        user = User(email="test@example.com", name="Test User")
         session.add(user)
         session.commit()
         session.refresh(user)
-        user_id = str(user.id)
 
     client = TestClient(app)
-    client.cookies.set(settings.session_cookie_name, user_id)
+    client.cookies.set(settings.session_cookie_name, str(user.id))
 
+    # Authenticated user should never get guest_prompts_remaining
     r = client.post("/chat", json={"message": "I feel stressed"})
     assert r.status_code == 200
     payload = r.json()
@@ -129,21 +148,16 @@ def test_authenticated_user_not_affected_by_guest_limit(monkeypatch):
     assert payload.get("risk_level") != "guest_limit_reached"
 
 
-def test_me_returns_is_guest_false_for_authenticated_user():
+def test_me_returns_is_guest_false_for_authenticated_user(guest_db):
     """GET /me for an authenticated user should include is_guest=False."""
-    from app import db
-    from app.models import User
-
-    db.init_db()
     with db.SessionLocal() as session:
-        user = User(email="guest_test2@example.com", name="Guest Test User 2")
+        user = User(email="test@example.com", name="Test User")
         session.add(user)
         session.commit()
         session.refresh(user)
-        user_id = str(user.id)
 
     client = TestClient(app)
-    client.cookies.set(settings.session_cookie_name, user_id)
+    client.cookies.set(settings.session_cookie_name, str(user.id))
 
     response = client.get("/me")
     assert response.status_code == 200

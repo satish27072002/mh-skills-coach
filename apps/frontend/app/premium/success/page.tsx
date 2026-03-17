@@ -3,16 +3,16 @@ import { Card, CardContent, CardHeader, CardTitle } from "../../../components/ui
 
 export default function PremiumSuccessPage() {
   return (
-    <AppShell title="Premium active" subtitle="Your therapist discovery features are now unlocked.">
-      <div className="mx-auto mt-8 w-full max-w-xl">
+    <AppShell>
+      <div className="mx-auto mt-8 w-full max-w-xl px-4">
         <Card>
           <CardHeader>
             <CardTitle>Premium Active</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <p>Your premium access is now active. You can use therapist search at any time.</p>
+            <p>Your premium access is now active. Therapist discovery features are unlocked.</p>
             <a
-              className="inline-flex h-10 items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 dark:bg-white dark:text-gray-900"
+              className="inline-flex h-10 items-center justify-center bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90"
               href="/"
             >
               Back to chat

@@ -5,7 +5,7 @@ import { AlertTriangle, ExternalLink, Mail, Phone } from "lucide-react";
 import type { Message } from "./chat-types";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
-import { Separator } from "./ui/separator";
+import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 
 type BookingAction = "YES" | "NO";
 
@@ -20,7 +20,7 @@ function formatExpiry(expiresAt: string): string {
 export default function ChatBubble({
   message,
   onBookingAction,
-  bookingActionDisabled = false
+  bookingActionDisabled = false,
 }: {
   message: Message;
   onBookingAction?: (action: BookingAction) => void;
@@ -46,10 +46,12 @@ export default function ChatBubble({
   return (
     <div className="flex justify-start">
       <div
-        className={`max-w-[85%] space-y-3 rounded-2xl rounded-bl-md px-4 py-3 text-sm shadow-sm sm:max-w-[70%] ${
-          isCrisis
-            ? "border border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30"
-            : "border bg-card"
+        className={`max-w-[92%] space-y-3 border px-4 py-3 text-sm shadow-sm sm:max-w-[80%] ${
+          isUser
+            ? "border-primary bg-primary text-[color:var(--background)]"
+            : isCrisis
+              ? "border-red-300 bg-red-50 text-foreground dark:border-red-900 dark:bg-red-950/30"
+              : "bg-surface text-foreground"
         }`}
       >
         {isCrisis ? (
@@ -102,7 +104,7 @@ export default function ChatBubble({
               {message.therapists.map((therapist) => {
                 const link = therapist.source_url || therapist.url;
                 return (
-                  <li key={`${therapist.name}-${therapist.address}`} className="rounded-lg border bg-background/50 p-3">
+                  <li key={`${therapist.name}-${therapist.address}`} className="border bg-card p-3 text-foreground">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="font-semibold">{therapist.name}</p>
                       <Badge variant="outline">{therapist.distance_km} km</Badge>
@@ -130,8 +132,8 @@ export default function ChatBubble({
 
         {/* Sources */}
         {message.sources && message.sources.length > 0 ? (
-          <details className="rounded-lg border bg-background/50 p-2">
-            <summary className="cursor-pointer text-xs font-semibold text-muted-foreground">Sources</summary>
+          <details className="border bg-card p-2 text-foreground">
+            <summary className="cursor-pointer text-xs font-semibold">Sources</summary>
             <ul className="space-y-2 pt-2 text-xs">
               {message.sources.map((source, idx) => (
                 <li key={`${source.source_id}-${idx}`}>
@@ -153,25 +155,40 @@ export default function ChatBubble({
 
         {/* Booking proposal */}
         {showBookingCard && bookingProposal ? (
-          <div className="rounded-lg border border-accent/30 bg-accent/5 p-3 space-y-2">
-            <p className="text-xs font-semibold text-accent">Booking proposal</p>
-            <div className="space-y-1 text-sm">
-              <p><span className="font-medium">To:</span> {bookingProposal.therapist_email}</p>
-              <p><span className="font-medium">Time:</span> {bookingProposal.requested_time}</p>
-              <p><span className="font-medium">Subject:</span> {bookingProposal.subject}</p>
-              <p className="whitespace-pre-wrap text-muted-foreground">{bookingProposal.body}</p>
-            </div>
-            <Separator />
-            <p className="text-xs text-muted-foreground">Expires: {formatExpiry(bookingProposal.expires_at)}</p>
-            <div className="flex gap-2 pt-1">
-              <Button type="button" size="sm" onClick={() => onBookingAction?.("YES")} disabled={bookingActionDisabled}>
-                Send email
-              </Button>
-              <Button type="button" variant="outline" size="sm" onClick={() => onBookingAction?.("NO")} disabled={bookingActionDisabled}>
-                Cancel
-              </Button>
-            </div>
-          </div>
+          <Card className="border-amber-300 bg-amber-50 text-foreground dark:bg-amber-950/20">
+            <CardHeader>
+              <CardTitle className="text-sm uppercase tracking-[0.15em] text-amber-900 dark:text-amber-200">Booking proposal</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              <p>
+                <span className="font-semibold">Therapist email:</span> {bookingProposal.therapist_email}
+              </p>
+              <p>
+                <span className="font-semibold">Requested time:</span> {bookingProposal.requested_time}
+              </p>
+              <p>
+                <span className="font-semibold">Subject:</span> {bookingProposal.subject}
+              </p>
+              <p className="whitespace-pre-wrap">
+                <span className="font-semibold">Body:</span> {bookingProposal.body}
+              </p>
+              <p className="text-xs text-muted-foreground">Expires at: {formatExpiry(bookingProposal.expires_at)}</p>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <Button type="button" size="sm" onClick={() => onBookingAction?.("YES")} disabled={bookingActionDisabled}>
+                  Send email
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onBookingAction?.("NO")}
+                  disabled={bookingActionDisabled}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         ) : null}
       </div>
     </div>
