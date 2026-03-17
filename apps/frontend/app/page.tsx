@@ -296,7 +296,7 @@ export default function Home() {
   /* ── Shared input bar renderer ── */
 
   const renderInputBar = () => (
-    <div className="glass-panel flex items-end gap-2 rounded-2xl border px-4 py-3 shadow-lg">
+    <div className="input-bar-depth flex items-end gap-2 rounded-2xl px-4 py-3">
       <Textarea
         ref={textareaRef}
         value={input}
@@ -456,7 +456,7 @@ export default function Home() {
 
         {messages.length === 0 ? (
           /* ═══ EMPTY STATE: centered layout ═══ */
-          <div className="flex flex-1 flex-col items-center justify-center px-4 pb-8">
+          <div className="flex flex-1 flex-col items-center justify-center px-4 pb-8" style={{ animation: "contentRise 0.8s ease-out forwards" }}>
             <div className="w-full max-w-2xl space-y-8 text-center">
               {/* Greeting */}
               <div>
@@ -492,7 +492,7 @@ export default function Home() {
           /* ═══ CHAT STATE: messages + floating bottom input ═══ */
           <>
             {/* Scrollable messages */}
-            <div ref={listRef} className="flex-1 overflow-y-auto px-4 py-6">
+            <div ref={listRef} className="flex-1 overflow-y-auto px-4 py-6" style={{ animation: "contentRise 0.5s ease-out forwards" }}>
               <div className="mx-auto max-w-3xl space-y-4">
                 {messages.map((msg) => (
                   <ChatBubble

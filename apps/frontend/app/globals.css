@@ -29,48 +29,58 @@
   --radius-xl: 1rem;
 }
 
-/* ─── Calming light palette: soft sage & warm neutrals ─── */
+/* ─── Twilight Ocean: calming blues, lavenders & indigo ─── */
 :root {
   color-scheme: light;
-  --background: #f5f7f4;
-  --foreground: #1a2e1a;
-  --muted-foreground: #4a6349;
+  --background: #f8f7ff;
+  --foreground: #1e1b4b;
+  --muted-foreground: #6366a0;
   --card: #ffffff;
-  --border: #c8d5c4;
-  --primary: #4a7c59;
-  --accent: #5b9a8b;
+  --border: #d4d0f0;
+  --primary: #6366f1;
+  --accent: #8b5cf6;
   --success: #047857;
   --danger: #b91c1c;
   --warning: #b45309;
   --sidebar: #ffffff;
-  --user-bubble: #4a7c59;
+  --user-bubble: #6366f1;
   --user-bubble-text: #ffffff;
-  --gradient-start: #ffffff;
-  --gradient-mid: #edf2eb;
-  --gradient-end: #c5ddd0;
-  --gradient-radial: rgba(91, 154, 139, 0.12);
+
+  /* Multi-stop gradient tokens */
+  --gradient-1: #ffffff;
+  --gradient-2: #f0ecff;
+  --gradient-3: #ddd6fe;
+  --gradient-4: #b4a8f8;
+  --gradient-5: #8b8cf5;
+  --gradient-radial-1: rgba(139, 92, 246, 0.15);
+  --gradient-radial-2: rgba(99, 102, 241, 0.10);
 }
 
-/* ─── Dark palette: deep forest ─── */
+/* ─── Dark palette: deep indigo & midnight ─── */
 .dark {
   color-scheme: dark;
-  --background: #141a14;
-  --foreground: #e8f0e8;
-  --muted-foreground: #8fa88f;
-  --card: #1c261c;
-  --border: #2e3e2e;
-  --primary: #6aad7b;
-  --accent: #5b9a8b;
+  --background: #0a0a12;
+  --foreground: #e8e5ff;
+  --muted-foreground: #9b97c4;
+  --card: #151525;
+  --border: #2a2850;
+  --primary: #818cf8;
+  --accent: #a78bfa;
   --success: #34d399;
   --danger: #fda4af;
   --warning: #facc15;
-  --sidebar: #0a0a0a;
-  --user-bubble: #3a6b4a;
-  --user-bubble-text: #e8f0e8;
-  --gradient-start: #0a0a0a;
-  --gradient-mid: #111a13;
-  --gradient-end: #1a3028;
-  --gradient-radial: rgba(91, 154, 139, 0.08);
+  --sidebar: #0a0a0f;
+  --user-bubble: #4f46e5;
+  --user-bubble-text: #e8e5ff;
+
+  /* Multi-stop gradient tokens */
+  --gradient-1: #0a0a12;
+  --gradient-2: #0f0f28;
+  --gradient-3: #161640;
+  --gradient-4: #1e1b4b;
+  --gradient-5: #312e81;
+  --gradient-radial-1: rgba(129, 140, 248, 0.08);
+  --gradient-radial-2: rgba(139, 92, 246, 0.06);
 }
 
 * {
@@ -80,26 +90,80 @@
 body {
   min-height: 100vh;
   background:
-    radial-gradient(ellipse 80% 50% at 50% 100%, var(--gradient-radial), transparent),
-    linear-gradient(180deg, var(--gradient-start) 0%, var(--gradient-mid) 45%, var(--gradient-end) 100%);
+    radial-gradient(ellipse 60% 40% at 20% 80%, var(--gradient-radial-1), transparent),
+    radial-gradient(ellipse 50% 35% at 80% 90%, var(--gradient-radial-2), transparent),
+    linear-gradient(
+      180deg,
+      var(--gradient-1) 0%,
+      var(--gradient-2) 20%,
+      var(--gradient-3) 45%,
+      var(--gradient-4) 70%,
+      var(--gradient-5) 100%
+    );
   background-attachment: fixed;
   color: var(--foreground);
   font-family: var(--font-sans);
+  animation: gradientRise 1.2s ease-out forwards;
 }
 
 a {
   color: inherit;
 }
 
-/* ─── Glass panel for floating input bars ─── */
+/* ─── Rising gradient on page load ─── */
+@keyframes gradientRise {
+  from {
+    background-position: center 40vh;
+    opacity: 0.6;
+  }
+  to {
+    background-position: center 0;
+    opacity: 1;
+  }
+}
+
+/* ─── Content rise animation ─── */
+@keyframes contentRise {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ─── Glass panel for floating elements ─── */
 .glass-panel {
-  background: rgba(255, 255, 255, 0.82);
-  background: color-mix(in srgb, var(--card) 82%, transparent);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: color-mix(in srgb, var(--card) 85%, transparent);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 
 .dark .glass-panel {
-  background: rgba(28, 38, 28, 0.75);
-  background: color-mix(in srgb, var(--card) 75%, transparent);
+  background: color-mix(in srgb, var(--card) 80%, transparent);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* ─── Elevated input bar with Lovable-like depth ─── */
+.input-bar-depth {
+  background: color-mix(in srgb, var(--card) 90%, transparent);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--border) 50%, transparent),
+    0 12px 40px rgba(0, 0, 0, 0.1),
+    0 4px 12px rgba(0, 0, 0, 0.06);
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.dark .input-bar-depth {
+  background: color-mix(in srgb, var(--card) 85%, transparent);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 12px 40px rgba(0, 0, 0, 0.4),
+    0 4px 12px rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
