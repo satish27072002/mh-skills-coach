@@ -57,26 +57,26 @@
 /* ─── Dark palette: deep indigo & midnight ─── */
 .dark {
   color-scheme: dark;
-  --background: #0a0a12;
+  --background: #060610;
   --foreground: #f5f5f5;
   --muted-foreground: #a8a4cc;
-  --card: #151525;
-  --border: #2a2850;
+  --card: #0e0e1e;
+  --border: #222044;
   --primary: #818cf8;
   --accent: #a78bfa;
   --success: #34d399;
   --danger: #fda4af;
   --warning: #facc15;
-  --sidebar: #0a0a0f;
+  --sidebar: #060610;
   --user-bubble: #4f46e5;
   --user-bubble-text: #f5f5f5;
 
-  /* Mesh blob colors — rich & dramatic for dark mode */
-  --blob-purple: rgba(139, 92, 246, 0.50);
-  --blob-blue: rgba(99, 102, 241, 0.45);
-  --blob-indigo: rgba(79, 70, 229, 0.38);
-  --blob-lavender: rgba(167, 139, 250, 0.22);
-  --blob-rose: rgba(196, 130, 246, 0.18);
+  /* Mesh blob colors — extra intense for dark mode */
+  --blob-purple: rgba(139, 92, 246, 0.65);
+  --blob-blue: rgba(99, 102, 241, 0.58);
+  --blob-indigo: rgba(79, 70, 229, 0.50);
+  --blob-lavender: rgba(167, 139, 250, 0.30);
+  --blob-rose: rgba(196, 130, 246, 0.25);
 }
 
 * {
@@ -152,8 +152,8 @@ a {
 }
 
 .dark .glass-panel {
-  background: color-mix(in srgb, var(--card) 80%, transparent);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.2);
+  background: color-mix(in srgb, var(--card) 85%, transparent);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 /* ─── Elevated input bar with Lovable-like depth ─── */
@@ -169,10 +169,10 @@ a {
 }
 
 .dark .input-bar-depth {
-  background: color-mix(in srgb, var(--card) 88%, transparent);
+  background: color-mix(in srgb, var(--card) 92%, transparent);
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.06),
-    0 12px 40px rgba(0, 0, 0, 0.4),
-    0 4px 12px rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(255, 255, 255, 0.10);
+    0 0 0 1px rgba(255, 255, 255, 0.05),
+    0 12px 40px rgba(0, 0, 0, 0.55),
+    0 4px 12px rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
