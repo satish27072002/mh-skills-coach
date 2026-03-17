@@ -491,7 +491,13 @@ def status() -> dict[str, Any]:
     }
 
 
-def _set_cookie(response: Response, name: str, value: str, request: Request | None = None) -> None:
+def _set_cookie(
+    response: Response,
+    name: str,
+    value: str,
+    request: Request | None = None,
+    max_age: int | None = None,
+) -> None:
     samesite = settings.cookie_samesite.lower()
     secure = settings.cookie_secure
     # Dev over plain HTTP cannot round-trip Secure cookies. Keep prod secure by default.
@@ -506,9 +512,11 @@ def _set_cookie(response: Response, name: str, value: str, request: Request | No
     response.set_cookie(
         name,
         value,
+        path="/",
         httponly=True,
         secure=secure,
-        samesite=samesite
+        samesite=samesite,
+        max_age=max_age,
     )
 
 
@@ -792,30 +800,43 @@ def get_me(request: Request, response: Response, db: Session = Depends(get_db)) 
     }
 
 
-@app.post("/guest/start")
+@app.get("/guest/ping")
+def guest_ping() -> dict[str, bool]:
+    """Diagnostic endpoint to verify guest route is reachable."""
+    return {"ok": True}
+
+
+@app.post("/guest")
 def guest_start(request: Request) -> JSONResponse:
     """Create a guest session with limited prompts."""
-    existing = _get_guest_session_token(request)
-    if existing:
-        used = _get_guest_prompt_count(existing)
-        return JSONResponse(content={
+    try:
+        existing = _get_guest_session_token(request)
+        if existing:
+            used = _get_guest_prompt_count(existing)
+            return JSONResponse(content={
+                "status": "ok",
+                "is_guest": True,
+                "guest_prompts_used": used,
+                "guest_prompts_limit": settings.guest_prompt_limit,
+                "guest_prompts_remaining": max(0, settings.guest_prompt_limit - used),
+            })
+        token = secrets.token_urlsafe(24)
+        _guest_prompt_counts[token] = 0
+        response = JSONResponse(content={
             "status": "ok",
             "is_guest": True,
-            "guest_prompts_used": used,
+            "guest_prompts_used": 0,
             "guest_prompts_limit": settings.guest_prompt_limit,
-            "guest_prompts_remaining": max(0, settings.guest_prompt_limit - used),
+            "guest_prompts_remaining": settings.guest_prompt_limit,
         })
-    token = secrets.token_urlsafe(24)
-    _guest_prompt_counts[token] = 0
-    response = JSONResponse(content={
-        "status": "ok",
-        "is_guest": True,
-        "guest_prompts_used": 0,
-        "guest_prompts_limit": settings.guest_prompt_limit,
-        "guest_prompts_remaining": settings.guest_prompt_limit,
-    })
-    _set_cookie(response, GUEST_SESSION_COOKIE_NAME, token, request=request)
-    return response
+        _set_cookie(response, GUEST_SESSION_COOKIE_NAME, token, request=request, max_age=86400)
+        return response
+    except Exception as exc:
+        logger.exception("guest_start failed: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Guest session error: {exc}"},
+        )
 
 
 @app.post("/logout")

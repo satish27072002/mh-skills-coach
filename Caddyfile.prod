@@ -21,7 +21,7 @@
     }
   }
 
-  @backend path /auth/* /health /status
+  @backend path /auth/* /health /status /guest /guest/*
   handle @backend {
     reverse_proxy backend:8000 {
       header_up Host {host}

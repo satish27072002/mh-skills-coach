@@ -1,37 +1,62 @@
-import type { ReactNode } from "react";
+"use client";
 
-import { Separator } from "./ui/separator";
+import { Menu, X } from "lucide-react";
+import type { ReactNode } from "react";
+import { useState } from "react";
 
 export default function AppShell({
-  title,
-  subtitle,
-  actions,
-  children
+  sidebar,
+  children,
 }: {
-  title: string;
-  subtitle: string;
-  actions?: ReactNode;
+  sidebar?: ReactNode;
   children: ReactNode;
 }) {
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-3 py-3 sm:px-6 sm:py-5">
-      <header className="rounded-xl border bg-card/90 px-4 py-4 shadow-sm backdrop-blur sm:px-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-muted-foreground">Mental Health Skills Coach</p>
-            <h1 className="font-display text-2xl leading-tight sm:text-3xl">{title}</h1>
-            <p className="max-w-2xl text-sm text-muted-foreground">{subtitle}</p>
-          </div>
-          {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
+    <div className="flex h-screen overflow-hidden">
+      {/* Mobile overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* Sidebar */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r bg-sidebar transition-transform duration-200 md:static md:translate-x-0 ${
+          sidebarOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        {/* Close button (mobile only) */}
+        <div className="flex items-center justify-end p-2 md:hidden">
+          <button
+            onClick={() => setSidebarOpen(false)}
+            className="p-1 text-muted-foreground hover:text-foreground"
+          >
+            <X className="h-5 w-5" />
+          </button>
         </div>
-      </header>
 
-      <main className="mt-4 flex flex-1 flex-col">{children}</main>
+        {sidebar}
+      </aside>
 
-      <Separator className="mt-4" />
-      <footer className="py-4 text-xs text-muted-foreground">
-        This product is not medical advice. If you are in immediate danger, contact local emergency services.
-      </footer>
+      {/* Main content */}
+      <div className="flex flex-1 flex-col overflow-hidden">
+        {/* Mobile header with hamburger */}
+        <header className="flex items-center border-b bg-sidebar px-4 py-3 md:hidden">
+          <button
+            onClick={() => setSidebarOpen(true)}
+            className="p-1 text-muted-foreground hover:text-foreground"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+          <span className="ml-3 text-sm font-semibold">MH Skills Coach</span>
+        </header>
+
+        <main className="flex flex-1 flex-col overflow-hidden">{children}</main>
+      </div>
     </div>
   );
 }
