@@ -91,14 +91,12 @@ export default function Home() {
   const [therapistResults, setTherapistResults] = useState<ChatResponse["therapists"]>([]);
   const [therapistError, setTherapistError] = useState<string | null>(null);
   const [therapistLoading, setTherapistLoading] = useState(false);
-  const [isGuest, setIsGuest] = useState(false);
-  const [guestPromptsRemaining, setGuestPromptsRemaining] = useState<number | null>(null);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   /* Auto-scroll to bottom on new messages */
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    if (listRef.current) {
+      listRef.current.scrollTop = listRef.current.scrollHeight;
     }
   }, [messages, isSending]);
 
@@ -216,9 +214,6 @@ export default function Home() {
         risk_level: data.risk_level,
       };
       setMessages((prev) => [...prev, assistantMsg]);
-      if (isGuest && data.guest_prompts_remaining != null) {
-        setGuestPromptsRemaining(data.guest_prompts_remaining);
-      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Something went wrong";
       const uiMessage = message === "Failed to fetch" ? "Failed to reach the API." : message;
