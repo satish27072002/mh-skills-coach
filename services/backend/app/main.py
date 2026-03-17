@@ -124,37 +124,92 @@ app.add_middleware(
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 BOOKING_SESSION_COOKIE_NAME = "mh_booking_session"
-GUEST_SESSION_COOKIE_NAME = settings.guest_session_cookie_name
-logger = logging.getLogger(__name__)
+
+# Configure structured logging at module load time
+configure_logging(level=settings.log_level, fmt=settings.log_format)
+logger = get_logger(__name__)
+
 UTC = ZoneInfo("UTC")
 _LAST_THERAPIST_LOCATION_BY_SESSION = LAST_THERAPIST_LOCATION_BY_SESSION
 
-# Guest mode: track prompt counts per guest session token
-_guest_prompt_counts: dict[str, int] = {}
+# ---------------------------------------------------------------------------
+# Rate limiter — shared across requests (in-process, thread-safe)
+# ---------------------------------------------------------------------------
+_rate_limiter = RateLimiter(
+    max_requests=settings.rate_limit_chat_requests,
+    window_seconds=settings.rate_limit_window_seconds,
+)
 
+# ---------------------------------------------------------------------------
+# Conversation history store — keyed by session ID
+# Stores list of {"role": "user"/"assistant", "content": "..."} dicts
+# Capped at settings.conversation_history_max_turns * 2 messages
+# ---------------------------------------------------------------------------
+_conversation_store: dict[str, list[dict[str, str]]] = {}
+
+# ---------------------------------------------------------------------------
+# Guest mode: track prompt counts per guest session token
+# ---------------------------------------------------------------------------
+_guest_prompt_counts: dict[str, int] = {}
+GUEST_SESSION_COOKIE_NAME = settings.guest_session_cookie_name
+
+
+def _get_session_key(user: Any, request: Any) -> str:
+    """Build a stable session key from user ID or session cookie."""
+    if user and hasattr(user, "id"):
+        return f"user:{user.id}"
+    session_cookie = request.cookies.get(settings.session_cookie_name)
+    if session_cookie:
+        return f"session:{session_cookie}"
+    # Fallback to client IP
+    client_host = getattr(request.client, "host", "unknown") if request.client else "unknown"
+    return f"ip:{client_host}"
+
+
+def _load_history(session_key: str) -> list[dict[str, str]]:
+    """Load conversation history for a session."""
+    return list(_conversation_store.get(session_key, []))
+
+
+def _save_history(session_key: str, history: list[dict[str, str]]) -> None:
+    """Save conversation history, capping at max turns."""
+    max_messages = settings.conversation_history_max_turns * 2  # user + assistant per turn
+    if len(history) > max_messages:
+        history = history[-max_messages:]
+    _conversation_store[session_key] = history
+
+
+def _append_to_history(
+    session_key: str,
+    user_message: str,
+    assistant_message: str,
+) -> None:
+    """Append a user+assistant exchange to conversation history."""
+    history = _load_history(session_key)
+    history.append({"role": "user", "content": user_message})
+    history.append({"role": "assistant", "content": assistant_message})
+    _save_history(session_key, history)
+
+
+# ---------------------------------------------------------------------------
+# Guest session helpers
+# ---------------------------------------------------------------------------
 
 def _get_guest_session_token(request: Request) -> str | None:
+    """Return the guest session token from cookie, or None."""
     token = request.cookies.get(GUEST_SESSION_COOKIE_NAME)
     if token and token.strip():
         return token.strip()
     return None
 
 
-def _ensure_guest_session(request: Request, response: Response) -> str:
-    existing = _get_guest_session_token(request)
-    if existing:
-        return existing
-    token = secrets.token_urlsafe(24)
-    _set_cookie(response, GUEST_SESSION_COOKIE_NAME, token, request=request)
-    _guest_prompt_counts[token] = 0
-    return token
-
-
 def _get_guest_prompt_count(token: str) -> int:
+    """Return the number of prompts used by a guest session."""
     return _guest_prompt_counts.get(token, 0)
 
 
 def _increment_guest_prompt_count(token: str) -> int:
+    """Increment and return the guest prompt count."""
     count = _guest_prompt_counts.get(token, 0) + 1
     _guest_prompt_counts[token] = count
     return count
@@ -795,7 +850,6 @@ def auth_google_callback(request: Request, db: Session = Depends(get_db)) -> Res
 def get_me(request: Request, response: Response, db: Session = Depends(get_db)) -> dict[str, Any]:
     user = _get_user_from_cookie(db, request)
     if not user:
-        # Check for guest session
         guest_token = _get_guest_session_token(request)
         if guest_token:
             used = _get_guest_prompt_count(guest_token)
@@ -900,15 +954,15 @@ def chat(
 
     message = payload.message.strip()
     user = _get_user_from_cookie(db, request)
+    session_key = _get_session_key(user, request)
 
-    # Guest mode: enforce prompt limit for unauthenticated users
+    # --- Guest mode: enforce prompt limit ---
     guest_token: str | None = None
     if not user:
         guest_token = _get_guest_session_token(request)
         if guest_token:
             used = _get_guest_prompt_count(guest_token)
             if used >= settings.guest_prompt_limit:
-                remaining = settings.guest_prompt_limit - used
                 return ChatResponse(
                     coach_message=(
                         f"You've used all {settings.guest_prompt_limit} free guest prompts. "
@@ -917,12 +971,28 @@ def chat(
                     risk_level="guest_limit_reached",
                 )
 
-    if contains_jailbreak_attempt(message):
-        return ChatResponse(
-            coach_message=(
-                "I can’t follow attempts to bypass safety boundaries. "
-                "I can still help with safe coping support, therapist search, or appointment email drafting."
-            )
+    def _count_guest_prompt(result: ChatResponse) -> ChatResponse:
+        """Increment guest prompt counter and attach remaining info."""
+        if guest_token:
+            count = _increment_guest_prompt_count(guest_token)
+            remaining = max(0, settings.guest_prompt_limit - count)
+            result.guest_prompts_remaining = remaining
+            log_event("guest_prompt_used", count=count, remaining=remaining, correlation_id=correlation_id)
+        return result
+
+    # --- Rate limiting ---
+    client_key = (
+        request.cookies.get(settings.session_cookie_name)
+        or (guest_token if guest_token else None)
+        or (request.client.host if request.client else "unknown")
+    )
+    try:
+        _rate_limiter.check(client_key)
+    except RateLimitExceeded:
+        log_event("rate_limit_exceeded", client_key=client_key, correlation_id=correlation_id)
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests. Please wait a moment before sending another message."
         )
 
     # --- Safety gate FIRST (crisis / jailbreak via SafetyGate) ---
@@ -1003,17 +1073,10 @@ def chat(
         correlation_id=correlation_id,
     )
 
-    def _count_guest_prompt(result: ChatResponse) -> ChatResponse:
-        """Increment guest prompt counter and add remaining info."""
-        if guest_token:
-            count = _increment_guest_prompt_count(guest_token)
-            remaining = max(0, settings.guest_prompt_limit - count)
-            result.guest_prompts_remaining = remaining
-            logger.info("guest_prompt_used token=%s count=%d remaining=%d", guest_token[:8], count, remaining)
-        return result
-
     if route == "THERAPIST_SEARCH":
-        return _count_guest_prompt(therapist_agent.handle(user=user, request=request, message=message))
+        therapist_response = therapist_agent.handle(user=user, request=request, message=message)
+        _append_to_history(session_key, message, therapist_response.coach_message or "")
+        return _count_guest_prompt(therapist_response)
 
     if route == "BOOKING_EMAIL":
         if not actor_key:
@@ -1028,10 +1091,17 @@ def chat(
             pending_expired=pending_expired,
         )
         if booking_response:
+            _append_to_history(session_key, message, booking_response.coach_message or "")
             return _count_guest_prompt(booking_response)
 
-    response_json = run_agent(message)
-    return _count_guest_prompt(ChatResponse(**response_json))
+    # --- COACH: pass conversation history for context continuity ---
+    with Timer() as t:
+        response_json = run_agent(message, history=history)
+    log_event("llm_call", route="COACH", duration_ms=round(t.elapsed_ms), correlation_id=correlation_id)
+
+    final_response = ChatResponse(**response_json)
+    _append_to_history(session_key, message, final_response.coach_message or "")
+    return _count_guest_prompt(final_response)
 
 
 @app.post("/payments/create-checkout-session", response_model=CheckoutSessionResponse)
