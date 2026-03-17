@@ -34,7 +34,7 @@
   color-scheme: light;
   --background: #f8f7ff;
   --foreground: #1e1b4b;
-  --muted-foreground: #6366a0;
+  --muted-foreground: #5b5891;
   --card: #ffffff;
   --border: #d4d0f0;
   --primary: #6366f1;
@@ -46,14 +46,12 @@
   --user-bubble: #6366f1;
   --user-bubble-text: #ffffff;
 
-  /* Multi-stop gradient tokens */
-  --gradient-1: #ffffff;
-  --gradient-2: #f0ecff;
-  --gradient-3: #ddd6fe;
-  --gradient-4: #b4a8f8;
-  --gradient-5: #8b8cf5;
-  --gradient-radial-1: rgba(139, 92, 246, 0.15);
-  --gradient-radial-2: rgba(99, 102, 241, 0.10);
+  /* Mesh blob colors — soft pastel for light mode */
+  --blob-purple: rgba(139, 92, 246, 0.28);
+  --blob-blue: rgba(99, 102, 241, 0.22);
+  --blob-indigo: rgba(79, 70, 229, 0.18);
+  --blob-lavender: rgba(167, 139, 250, 0.12);
+  --blob-rose: rgba(196, 130, 246, 0.10);
 }
 
 /* ─── Dark palette: deep indigo & midnight ─── */
@@ -61,7 +59,7 @@
   color-scheme: dark;
   --background: #0a0a12;
   --foreground: #e8e5ff;
-  --muted-foreground: #9b97c4;
+  --muted-foreground: #b0acd4;
   --card: #151525;
   --border: #2a2850;
   --primary: #818cf8;
@@ -73,14 +71,12 @@
   --user-bubble: #4f46e5;
   --user-bubble-text: #e8e5ff;
 
-  /* Multi-stop gradient tokens */
-  --gradient-1: #0a0a12;
-  --gradient-2: #0f0f28;
-  --gradient-3: #161640;
-  --gradient-4: #1e1b4b;
-  --gradient-5: #312e81;
-  --gradient-radial-1: rgba(129, 140, 248, 0.08);
-  --gradient-radial-2: rgba(139, 92, 246, 0.06);
+  /* Mesh blob colors — richer for dark mode */
+  --blob-purple: rgba(139, 92, 246, 0.40);
+  --blob-blue: rgba(99, 102, 241, 0.35);
+  --blob-indigo: rgba(79, 70, 229, 0.28);
+  --blob-lavender: rgba(167, 139, 250, 0.15);
+  --blob-rose: rgba(196, 130, 246, 0.12);
 }
 
 * {
@@ -89,35 +85,48 @@
 
 body {
   min-height: 100vh;
-  background:
-    radial-gradient(ellipse 60% 40% at 20% 80%, var(--gradient-radial-1), transparent),
-    radial-gradient(ellipse 50% 35% at 80% 90%, var(--gradient-radial-2), transparent),
-    linear-gradient(
-      180deg,
-      var(--gradient-1) 0%,
-      var(--gradient-2) 20%,
-      var(--gradient-3) 45%,
-      var(--gradient-4) 70%,
-      var(--gradient-5) 100%
-    );
-  background-attachment: fixed;
+  background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans);
-  animation: gradientRise 1.2s ease-out forwards;
+  position: relative;
+}
+
+/* ─── Organic mesh blobs (Lovable-style watercolor background) ─── */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    /* Large purple blob — bottom-left */
+    radial-gradient(circle 650px at 10% 90%, var(--blob-purple), transparent 70%),
+    /* Blue blob — bottom-center */
+    radial-gradient(circle 550px at 50% 95%, var(--blob-blue), transparent 70%),
+    /* Indigo blob — bottom-right */
+    radial-gradient(circle 600px at 90% 85%, var(--blob-indigo), transparent 70%),
+    /* Lavender haze — mid-left, bleeds upward */
+    radial-gradient(circle 450px at 20% 65%, var(--blob-lavender), transparent 70%),
+    /* Rose accent — mid-right, subtle */
+    radial-gradient(circle 400px at 75% 70%, var(--blob-rose), transparent 70%),
+    /* Fade to clean background at top */
+    linear-gradient(to top, transparent 50%, var(--background) 90%);
+  filter: blur(80px);
+  animation: blobRise 1.4s ease-out forwards;
 }
 
 a {
   color: inherit;
 }
 
-/* ─── Rising gradient on page load ─── */
-@keyframes gradientRise {
+/* ─── Blobs rise from below on page load ─── */
+@keyframes blobRise {
   from {
-    background-position: center 40vh;
-    opacity: 0.6;
+    transform: translateY(60px);
+    opacity: 0;
   }
   to {
-    background-position: center 0;
+    transform: translateY(0);
     opacity: 1;
   }
 }
@@ -149,7 +158,7 @@ a {
 
 /* ─── Elevated input bar with Lovable-like depth ─── */
 .input-bar-depth {
-  background: color-mix(in srgb, var(--card) 90%, transparent);
+  background: color-mix(in srgb, var(--card) 92%, transparent);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
   box-shadow:
@@ -160,10 +169,10 @@ a {
 }
 
 .dark .input-bar-depth {
-  background: color-mix(in srgb, var(--card) 85%, transparent);
+  background: color-mix(in srgb, var(--card) 88%, transparent);
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.06),
     0 12px 40px rgba(0, 0, 0, 0.4),
     0 4px 12px rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.10);
 }

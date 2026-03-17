@@ -44,7 +44,7 @@ export default function LoginClient() {
             <h1 className="font-display text-4xl font-bold tracking-tight sm:text-5xl">
               MH Skills Coach
             </h1>
-            <p className="mt-4 text-lg leading-relaxed text-muted-foreground">
+            <p className="mt-4 text-lg leading-relaxed text-foreground/70">
               Practice evidence-based coping skills, discover nearby therapists,
               and take a grounded next step.
             </p>

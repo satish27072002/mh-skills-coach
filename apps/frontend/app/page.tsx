@@ -64,7 +64,7 @@ function SidebarThemeToggle() {
     <Button
       variant="ghost"
       onClick={toggle}
-      className="w-full justify-start gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground"
+      className="w-full justify-start gap-3 rounded-lg bg-foreground/[0.04] px-3 py-2.5 text-sm font-medium text-foreground/80 hover:bg-foreground/[0.08] hover:text-foreground"
     >
       {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
       {isDark ? "Light mode" : "Dark mode"}
@@ -360,7 +360,7 @@ export default function Home() {
         <Button
           variant="ghost"
           onClick={handleNewChat}
-          className="w-full justify-start gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground"
+          className="w-full justify-start gap-3 rounded-lg bg-foreground/[0.04] px-3 py-2.5 text-sm font-medium text-foreground/80 hover:bg-foreground/[0.08] hover:text-foreground"
         >
           <MessageSquarePlus className="h-4 w-4" />
           New chat
@@ -380,7 +380,7 @@ export default function Home() {
             }
           }}
           disabled={checkoutLoading || premiumStatus === "unknown"}
-          className="w-full justify-start gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground"
+          className="w-full justify-start gap-3 rounded-lg bg-foreground/[0.04] px-3 py-2.5 text-sm font-medium text-foreground/80 hover:bg-foreground/[0.08] hover:text-foreground"
         >
           <Search className="h-4 w-4" />
           Find a therapist
@@ -397,7 +397,7 @@ export default function Home() {
           <Button
             variant="ghost"
             onClick={() => router.push("/login")}
-            className="w-full justify-start gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground"
+            className="w-full justify-start gap-3 rounded-lg bg-foreground/[0.04] px-3 py-2.5 text-sm font-medium text-foreground/80 hover:bg-foreground/[0.08] hover:text-foreground"
           >
             Sign in with Google
           </Button>
@@ -406,7 +406,7 @@ export default function Home() {
             variant="ghost"
             onClick={startCheckout}
             disabled={checkoutLoading || premiumStatus === "unknown"}
-            className="w-full justify-start gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground"
+            className="w-full justify-start gap-3 rounded-lg bg-foreground/[0.04] px-3 py-2.5 text-sm font-medium text-foreground/80 hover:bg-foreground/[0.08] hover:text-foreground"
           >
             {checkoutLoading ? "Opening..." : "Get Premium"}
           </Button>
@@ -474,7 +474,7 @@ export default function Home() {
                   <button
                     key={prompt}
                     onClick={() => sendMessage(prompt)}
-                    className="group rounded-xl border bg-card/60 px-4 py-3.5 text-left text-sm text-foreground backdrop-blur-sm transition-all hover:bg-card hover:shadow-md"
+                    className="group rounded-xl border bg-card/80 px-4 py-3.5 text-left text-sm font-medium text-foreground backdrop-blur-sm transition-all hover:bg-card hover:shadow-md"
                   >
                     {prompt}
                   </button>
