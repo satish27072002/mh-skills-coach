@@ -1,7 +1,5 @@
 import type { ReactNode } from "react";
 
-import { Separator } from "./ui/separator";
-
 export default function AppShell({
   title,
   subtitle,
@@ -9,28 +7,23 @@ export default function AppShell({
   children
 }: {
   title: string;
-  subtitle: string;
+  subtitle?: string;
   actions?: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-3 py-3 sm:px-6 sm:py-5">
-      <header className="rounded-xl border bg-card/90 px-4 py-4 shadow-sm backdrop-blur sm:px-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-muted-foreground">Mental Health Skills Coach</p>
-            <h1 className="font-display text-2xl leading-tight sm:text-3xl">{title}</h1>
-            <p className="max-w-2xl text-sm text-muted-foreground">{subtitle}</p>
-          </div>
-          {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
+    <div className="flex min-h-screen flex-col">
+      <header className="sticky top-0 z-30 border-b bg-card/80 backdrop-blur-lg">
+        <div className="mx-auto flex h-14 max-w-3xl items-center justify-between px-4">
+          <span className="text-sm font-semibold text-primary">MH Skills Coach</span>
+          {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
         </div>
       </header>
 
-      <main className="mt-4 flex flex-1 flex-col">{children}</main>
+      <main className="flex flex-1 flex-col">{children}</main>
 
-      <Separator className="mt-4" />
-      <footer className="py-4 text-xs text-muted-foreground">
-        This product is not medical advice. If you are in immediate danger, contact local emergency services.
+      <footer className="border-t py-3 text-center text-xs text-muted-foreground">
+        Not medical advice. If you are in immediate danger, contact local emergency services.
       </footer>
     </div>
   );

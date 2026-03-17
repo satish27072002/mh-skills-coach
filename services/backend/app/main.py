@@ -579,6 +579,7 @@ def _set_cookie(response: Response, name: str, value: str, request: Request | No
     response.set_cookie(
         name,
         value,
+        path="/",
         httponly=True,
         secure=secure,
         samesite=samesite

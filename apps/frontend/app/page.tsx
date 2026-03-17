@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUp, Loader2, Search } from "lucide-react";
+import { ArrowUp, Loader2, Search, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -13,7 +13,6 @@ import UserMenu from "../components/user-menu";
 import type { ChatResponse, Message } from "../components/chat-types";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -22,7 +21,6 @@ import {
   DialogTitle
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
-import { Separator } from "../components/ui/separator";
 import { Textarea } from "../components/ui/textarea";
 
 export default function Home() {
@@ -43,14 +41,16 @@ export default function Home() {
   const [therapistLoading, setTherapistLoading] = useState(false);
   const [isGuest, setIsGuest] = useState(false);
   const [guestPromptsRemaining, setGuestPromptsRemaining] = useState<number | null>(null);
-  const listRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
+  /* Auto-scroll to bottom on new messages */
   useEffect(() => {
-    if (listRef.current) {
-      listRef.current.scrollTop = listRef.current.scrollHeight;
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages, isSending]);
 
+  /* Auth check on mount */
   useEffect(() => {
     let cancelled = false;
     const loadMe = async () => {
@@ -203,8 +203,7 @@ export default function Home() {
       return;
     }
     if (!therapistLocation.trim()) {
-      const message = "Please enter a city or postcode.";
-      setTherapistError(message);
+      setTherapistError("Please enter a city or postcode.");
       return;
     }
     setTherapistLoading(true);
@@ -239,74 +238,66 @@ export default function Home() {
     }
   };
 
+  /* ── Loading state ── */
   if (authStatus === "loading") {
     return (
-      <main className="flex min-h-screen items-center justify-center px-4">
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle>Mental Health Skills Coach</CardTitle>
-          </CardHeader>
-          <CardContent className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Checking session…
-          </CardContent>
-        </Card>
-      </main>
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="h-6 w-6 animate-spin text-primary" />
+          <p className="text-sm text-muted-foreground">Loading your session...</p>
+        </div>
+      </div>
     );
   }
 
+  const guestLimitReached = isGuest && guestPromptsRemaining === 0;
+  const inputDisabled = guestLimitReached;
+
   return (
     <AppShell
-      title="Steadying routines, one chat at a time"
-      subtitle="Practical support, therapist discovery, and confirmation-based booking emails in one flow."
+      title="MH Skills Coach"
       actions={
         <>
           <StatusBadge />
           <ThemeToggle />
           {isGuest && guestPromptsRemaining != null ? (
             <Badge variant={guestPromptsRemaining <= 3 ? "destructive" : "secondary"}>
-              {guestPromptsRemaining} prompt{guestPromptsRemaining !== 1 ? "s" : ""} left
+              {guestPromptsRemaining} left
             </Badge>
           ) : null}
           {isGuest ? (
-            <Button
-              variant="default"
-              size="sm"
-              onClick={() => router.push("/login")}
-            >
-              Sign in with Google
+            <Button variant="default" size="sm" onClick={() => router.push("/login")}>
+              Sign in
             </Button>
           ) : (
             <>
-              <Button
-                variant={premiumStatus === "premium" ? "default" : "secondary"}
-                size="sm"
-                onClick={() => {
-                  if (premiumStatus === "premium") {
+              {premiumStatus === "premium" ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
                     setTherapistModalOpen(true);
                     setTherapistResults([]);
                     setTherapistError(null);
-                  } else {
-                    startCheckout();
-                  }
-                }}
-                disabled={checkoutLoading || premiumStatus === "unknown"}
-              >
-                <Search className="h-4 w-4" />
-                {premiumStatus === "premium" ? "Find a therapist" : "Get Premium to find a therapist"}
-              </Button>
-              {premiumStatus === "premium" ? (
-                <Badge variant="success">Premium Active</Badge>
+                  }}
+                >
+                  <Search className="h-3.5 w-3.5" />
+                  Find therapist
+                </Button>
               ) : (
                 <Button
-                  variant="default"
+                  variant="outline"
                   size="sm"
                   onClick={startCheckout}
                   disabled={checkoutLoading || premiumStatus === "unknown"}
                 >
-                  {checkoutLoading ? "Opening..." : premiumStatus === "unknown" ? "Checking..." : "Get Premium"}
+                  <Sparkles className="h-3.5 w-3.5" />
+                  {checkoutLoading ? "Opening..." : "Get Premium"}
                 </Button>
               )}
+              {premiumStatus === "premium" ? (
+                <Badge variant="success">Premium</Badge>
+              ) : null}
             </>
           )}
           <UserMenu
@@ -318,31 +309,55 @@ export default function Home() {
         </>
       }
     >
-      {error ? (
-        <Card className="mb-4 border-red-200 bg-red-50 dark:border-red-900/70 dark:bg-red-950/30">
-          <CardContent className="p-3 text-sm text-red-700 dark:text-red-300">{error}</CardContent>
-        </Card>
-      ) : null}
+      {/* ── Full-height chat area ── */}
+      <div className="relative mx-auto flex w-full max-w-3xl flex-1 flex-col px-4">
 
-      {isGuest && guestPromptsRemaining === 0 ? (
-        <Card className="mb-4 border-amber-200 bg-amber-50 dark:border-amber-900/70 dark:bg-amber-950/30">
-          <CardContent className="flex items-center justify-between p-3 text-sm text-amber-800 dark:text-amber-200">
-            <span>You&apos;ve used all your free guest prompts. Sign in for unlimited access.</span>
+        {/* Error banner */}
+        {error ? (
+          <div className="mb-3 mt-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
+            {error}
+          </div>
+        ) : null}
+
+        {/* Guest limit banner */}
+        {guestLimitReached ? (
+          <div className="mb-3 mt-2 flex items-center justify-between gap-3 rounded-xl border border-warning/30 bg-warning/5 px-4 py-2.5 text-sm">
+            <span className="text-muted-foreground">You&apos;ve used all free prompts. Sign in for unlimited access.</span>
             <Button size="sm" variant="default" onClick={() => router.push("/login")}>
               Sign in
             </Button>
-          </CardContent>
-        </Card>
-      ) : null}
+          </div>
+        ) : null}
 
-      <Card className="flex min-h-[56vh] flex-1 flex-col">
-        <CardContent className="flex h-full flex-1 flex-col gap-4 p-4 sm:p-5">
-          <div ref={listRef} className="flex-1 overflow-y-auto rounded-lg border bg-surface/80 p-3">
-            {messages.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-center text-sm text-muted-foreground">
-                Share how you are feeling, and I will suggest a grounded next step.
+        {/* ── Message list ── */}
+        <div ref={scrollRef} className="flex-1 overflow-y-auto py-4">
+          {messages.length === 0 ? (
+            <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
+              <div className="rounded-2xl bg-primary/10 p-4">
+                <Sparkles className="h-8 w-8 text-primary" />
               </div>
-            ) : null}
+              <div className="space-y-1.5">
+                <h2 className="text-lg font-semibold text-foreground">How are you feeling today?</h2>
+                <p className="max-w-sm text-sm text-muted-foreground">
+                  Share what&apos;s on your mind and I&apos;ll suggest a grounded next step &mdash; a breathing exercise, coping strategy, or help finding a therapist.
+                </p>
+              </div>
+              <div className="mt-2 flex flex-wrap justify-center gap-2">
+                {["I feel anxious", "I'm stressed about work", "Help me find a therapist"].map((prompt) => (
+                  <button
+                    key={prompt}
+                    type="button"
+                    className="rounded-full border bg-card px-3.5 py-1.5 text-sm text-muted-foreground transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-foreground"
+                    onClick={() => {
+                      setInput(prompt);
+                    }}
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
             <div className="space-y-4">
               {messages.map((msg) => (
                 <ChatBubble
@@ -353,17 +368,20 @@ export default function Home() {
                 />
               ))}
               {isSending ? (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Thinking...
+                <div className="flex justify-start">
+                  <div className="flex items-center gap-2 rounded-2xl rounded-bl-md border bg-card px-4 py-3 text-sm text-muted-foreground shadow-sm">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Thinking...
+                  </div>
                 </div>
               ) : null}
             </div>
-          </div>
+          )}
+        </div>
 
-          <Separator />
-
-          <div className="space-y-2">
+        {/* ── Bottom-anchored input ── */}
+        <div className="sticky bottom-0 border-t bg-background pb-4 pt-3">
+          <div className="relative">
             <Textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -373,53 +391,52 @@ export default function Home() {
                   handleSend();
                 }
               }}
-              rows={3}
-              className="resize-none"
-              placeholder={isGuest && guestPromptsRemaining === 0 ? "Guest limit reached — sign in for unlimited access" : "I feel anxious right now..."}
-              disabled={isGuest && guestPromptsRemaining === 0}
+              rows={1}
+              className="min-h-[48px] resize-none rounded-xl border bg-card py-3 pl-4 pr-12 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-primary/40"
+              placeholder={inputDisabled ? "Guest limit reached — sign in for unlimited access" : "Message MH Skills Coach..."}
+              disabled={inputDisabled}
             />
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-xs text-muted-foreground">
-                {isGuest && guestPromptsRemaining != null
-                  ? `${guestPromptsRemaining} prompt${guestPromptsRemaining !== 1 ? "s" : ""} remaining · Enter to send`
-                  : "Enter to send, Shift+Enter for newline"}
-              </span>
-              <Button onClick={handleSend} disabled={isSending || !input.trim() || (isGuest && guestPromptsRemaining === 0)}>
-                {isSending ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Thinking...
-                  </>
-                ) : (
-                  <>
-                    <ArrowUp className="h-4 w-4" />
-                    Send
-                  </>
-                )}
-              </Button>
-            </div>
+            <Button
+              type="button"
+              size="icon"
+              className="absolute bottom-1.5 right-1.5 h-9 w-9 rounded-lg"
+              onClick={handleSend}
+              disabled={isSending || !input.trim() || inputDisabled}
+            >
+              {isSending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <ArrowUp className="h-4 w-4" />
+              )}
+            </Button>
           </div>
-        </CardContent>
-      </Card>
+          <p className="mt-1.5 text-center text-xs text-muted-foreground">
+            {isGuest && guestPromptsRemaining != null
+              ? `${guestPromptsRemaining} prompt${guestPromptsRemaining !== 1 ? "s" : ""} remaining`
+              : "Not medical advice. Press Enter to send."}
+          </p>
+        </div>
+      </div>
 
+      {/* ── Therapist search modal ── */}
       <Dialog open={therapistModalOpen} onOpenChange={setTherapistModalOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Therapist search</DialogTitle>
-            <DialogDescription>Search local providers by city/postcode and optional radius.</DialogDescription>
+            <DialogTitle>Find a therapist</DialogTitle>
+            <DialogDescription>Search local providers by city or postcode.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-xs font-semibold uppercase tracking-[0.15em] text-muted-foreground">City or postcode</label>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">City or postcode</label>
               <Input value={therapistLocation} onChange={(e) => setTherapistLocation(e.target.value)} placeholder="Stockholm" />
             </div>
-            <div className="space-y-2">
-              <label className="text-xs font-semibold uppercase tracking-[0.15em] text-muted-foreground">Radius (km, optional)</label>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Radius (km, optional)</label>
               <Input value={therapistRadius} onChange={(e) => setTherapistRadius(e.target.value)} placeholder="10" />
             </div>
 
             {therapistError ? (
-              <div className="rounded-md border border-red-200 bg-red-50 p-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+              <div className="rounded-lg border border-red-200 bg-red-50 p-2.5 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
                 {therapistError}
               </div>
             ) : null}
@@ -445,23 +462,23 @@ export default function Home() {
 
             {therapistResults && therapistResults.length > 0 ? (
               <div className="space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-[0.15em] text-muted-foreground">Results</p>
+                <p className="text-xs font-medium text-muted-foreground">Results</p>
                 <ul className="space-y-2 text-sm">
                   {therapistResults.map((therapist) => {
                     const link = therapist.source_url || therapist.url;
                     return (
-                      <li key={`${therapist.name}-${therapist.address}`} className="rounded-lg border p-3">
+                      <li key={`${therapist.name}-${therapist.address}`} className="rounded-lg border bg-card p-3">
                         {link ? (
-                          <a className="font-semibold underline" href={link} target="_blank" rel="noreferrer">
+                          <a className="font-semibold text-primary underline underline-offset-2" href={link} target="_blank" rel="noreferrer">
                             {therapist.name}
                           </a>
                         ) : (
                           <p className="font-semibold">{therapist.name}</p>
                         )}
-                        <p className="text-foreground/70">{therapist.address}</p>
-                        <p className="text-foreground/70">Distance: {therapist.distance_km} km</p>
-                        {therapist.phone ? <p className="text-foreground/70">Phone: {therapist.phone}</p> : null}
-                        {therapist.email ? <p className="text-foreground/70">Email: {therapist.email}</p> : null}
+                        <p className="mt-0.5 text-muted-foreground">{therapist.address}</p>
+                        <p className="text-muted-foreground">{therapist.distance_km} km away</p>
+                        {therapist.phone ? <p className="text-muted-foreground">Phone: {therapist.phone}</p> : null}
+                        {therapist.email ? <p className="text-muted-foreground">Email: {therapist.email}</p> : null}
                       </li>
                     );
                   })}
