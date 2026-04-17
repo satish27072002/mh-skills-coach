@@ -49,7 +49,7 @@ services:
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]
     environment:
       - DATABASE_URL=${DATABASE_URL}
-      - MCP_BASE_URL=${MCP_BASE_URL:-http://mcp:7000}
+      - MCP_BASE_URL=${MCP_BASE_URL:-http://mcp:7000/mcp}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
       - COOKIE_SECURE=${COOKIE_SECURE:-true}
       - COOKIE_SAMESITE=${COOKIE_SAMESITE:-lax}
