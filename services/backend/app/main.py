@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from .agents import BookingEmailAgent, ChatRouter, RouterInput, SafetyGate, TherapistSearchAgent
 from .agents.therapist_agent import LAST_THERAPIST_LOCATION_BY_SESSION
 from .config import settings
-from .agent_graph import run_agent
+from .agent_graph import GraphRuntimeContext, run_agent
 from .booking import (
     BOOKING_TTL_MINUTES,
     STOCKHOLM_TZ,
@@ -1001,103 +1001,31 @@ def chat(
     pending_action = None
     pending_expired = False
     if actor_key:
-        pending_action, pending_expired = load_pending_booking(db, actor_key)
+        try:
+            pending_action, pending_expired = load_pending_booking(db, actor_key)
+        except Exception:
+            pending_action, pending_expired = None, False
 
-    therapist_agent = _build_therapist_agent()
-    safety_gate = SafetyGate(therapist_agent=therapist_agent)
-    safety_response = safety_gate.handle(user=user, request=request, message=message)
-    if safety_response:
-        log_event("safety_trigger", trigger_type="safety_gate", correlation_id=correlation_id)
-        _append_to_history(session_key, message, safety_response.coach_message or "")
-        return _count_guest_prompt(safety_response)
-
-    # --- Jailbreak guardrail ---
-    if contains_jailbreak_attempt(message):
-        log_event("safety_trigger", trigger_type="jailbreak", correlation_id=correlation_id)
-        jailbreak_response = ChatResponse(
-            coach_message=(
-                "I can't follow attempts to bypass safety boundaries. "
-                "I'm here to help with mental health coping skills, finding therapists, "
-                "or booking appointments — nothing outside that scope."
-            )
-        )
-        _append_to_history(session_key, message, jailbreak_response.coach_message or "")
-        return _count_guest_prompt(jailbreak_response)
-
-    # --- Load conversation history BEFORE scope check so the LLM classifier
-    # can use conversation context to make smarter in/out-of-scope decisions ---
     history = _load_history(session_key)
+    if not actor_key and user:
+        actor_key = str(user.id)
+    elif not actor_key:
+        actor_key = _ensure_booking_actor_key(user, request, response)
 
-    # --- Scope check — only after safety/crisis is already handled ---
-    # Passes history so the LLM can see earlier messages (e.g. "bugs making me sad"
-    # means a follow-up "tips for debugging" is contextually in-scope).
-    if not scope_check(message, history):
-        log_event("safety_trigger", trigger_type="out_of_scope", correlation_id=correlation_id)
-        out_of_scope_response = ChatResponse(
-            coach_message=(
-                "I'm here to help with mental health coping skills, finding therapists, "
-                "or booking appointments. I'm not able to help with that — "
-                "is there something in those areas I can support you with?"
-            )
-        )
-        _append_to_history(session_key, message, out_of_scope_response.coach_message or "")
-        return _count_guest_prompt(out_of_scope_response)
-
-    # Note: emotional state messages (anxious, stressed, sad, etc.) are intentionally
-    # routed through run_agent() below so the LLM can respond with full conversation
-    # history context — giving contextually-aware, non-repetitive coping guidance.
-
-    if is_prescription_request(message):
-        log_event("safety_trigger", trigger_type="prescription", correlation_id=correlation_id)
-        prescription_response = route_message(message)
-        _append_to_history(session_key, message, prescription_response.coach_message or "")
-        return _count_guest_prompt(prescription_response)
-
-    router = _build_router()
-    route = router.route(
-        RouterInput(
-            message=message,
-            has_pending_booking=bool(pending_action),
-            has_pending_therapist_location=therapist_agent.has_pending_location_request(
+    with Timer() as t:
+        response_json = run_agent(
+            message,
+            history=history,
+            context=GraphRuntimeContext(
+                db=db,
                 user=user,
+                actor_key=actor_key,
+                pending_action=pending_action,
+                pending_expired=pending_expired,
                 request=request,
             ),
         )
-    )
-    log_event(
-        "agent_routing",
-        route=route,
-        has_pending_booking=bool(pending_action),
-        has_pending_location=therapist_agent.has_pending_location_request(user=user, request=request),
-        user_id=str(user.id) if user else None,
-        correlation_id=correlation_id,
-    )
-
-    if route == "THERAPIST_SEARCH":
-        therapist_response = therapist_agent.handle(user=user, request=request, message=message)
-        _append_to_history(session_key, message, therapist_response.coach_message or "")
-        return _count_guest_prompt(therapist_response)
-
-    if route == "BOOKING_EMAIL":
-        if not actor_key:
-            actor_key = _ensure_booking_actor_key(user, request, response)
-        booking_agent = _build_booking_agent()
-        booking_response = booking_agent.handle(
-            db=db,
-            user=user,
-            actor_key=actor_key,
-            message=message,
-            pending_action=pending_action,
-            pending_expired=pending_expired,
-        )
-        if booking_response:
-            _append_to_history(session_key, message, booking_response.coach_message or "")
-            return _count_guest_prompt(booking_response)
-
-    # --- COACH: pass conversation history for context continuity ---
-    with Timer() as t:
-        response_json = run_agent(message, history=history)
-    log_event("llm_call", route="COACH", duration_ms=round(t.elapsed_ms), correlation_id=correlation_id)
+    log_event("llm_call", route="LANGGRAPH_SUPERVISOR", duration_ms=round(t.elapsed_ms), correlation_id=correlation_id)
 
     final_response = ChatResponse(**response_json)
     _append_to_history(session_key, message, final_response.coach_message or "")
