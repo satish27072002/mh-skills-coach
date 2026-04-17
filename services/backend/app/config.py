@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str = "postgresql+psycopg://postgres:postgres@postgres:5432/mh"
-    mcp_base_url: str = "http://mcp:7000"
+    mcp_base_url: str = "http://mcp:7000/mcp"
     frontend_url: str = "http://localhost:3000"
     nominatim_base_url: str = "https://nominatim.openstreetmap.org"
     overpass_base_url: str = "https://overpass-api.de"
@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     dev_mode: bool = False
     llm_provider: Literal["ollama", "openai", "mock"] = "ollama"
     embed_provider: Literal["ollama", "openai", "mock"] = "ollama"
+    llm_temperature: float = 0.1
     ollama_base_url: str = "http://ollama:11434"
     ollama_model: str = "gemma2:2b"
     ollama_embed_model: str = "nomic-embed-text"

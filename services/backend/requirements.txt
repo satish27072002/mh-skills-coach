@@ -12,6 +12,10 @@ httpx==0.27.0
 jsonschema==4.23.0
 google-auth==2.33.0
 requests==2.32.3
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+langchain-ollama>=0.2.0
+langchain-mcp-adapters>=0.1.4
 langgraph==0.2.39
 pypdf==4.2.0
 # Week 1 — Observability
@@ -21,3 +25,4 @@ pandas>=2.0.0
 # Week 2 — Resilience
 tenacity>=8.2.0
 openai>=1.0.0
+mcp>=1.12.4
