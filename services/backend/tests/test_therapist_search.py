@@ -1,4 +1,3 @@
-import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -7,15 +6,6 @@ from app import db, mcp_client
 from app.config import settings
 from app.main import app
 from app.models import User
-
-
-class DummyResponse:
-    def __init__(self, payload, status_code=200):
-        self._payload = payload
-        self.status_code = status_code
-
-    def json(self):
-        return self._payload
 
 
 @pytest.fixture()
@@ -40,25 +30,21 @@ def _create_user(*, is_premium: bool) -> User:
 
 
 def test_mcp_therapist_search_success(monkeypatch):
-    monkeypatch.setattr(
-        mcp_client.httpx,
-        "post",
-        lambda *args, **kwargs: DummyResponse(
+    async def invoke_stub(tool_suffix, payload):
+        assert tool_suffix == "therapist_search_tool"
+        assert payload["location_text"] == "Stockholm"
+        return [
             {
-                "ok": True,
-                "results": [
-                    {
-                        "name": "Calm Clinic",
-                        "address": "1 Main St",
-                        "distance_km": 1.1,
-                        "phone": "+46 8 123 000",
-                        "email": None,
-                        "source_url": "https://example.com/clinic"
-                    }
-                ]
+                "name": "Calm Clinic",
+                "address": "1 Main St",
+                "distance_km": 1.1,
+                "phone": "+46 8 123 000",
+                "email": None,
+                "source_url": "https://example.com/clinic",
             }
-        )
-    )
+        ]
+
+    monkeypatch.setattr(mcp_client, "ainvoke_mcp_tool", invoke_stub)
 
     results = mcp_client.mcp_therapist_search("Stockholm", radius_km=5, specialty=None, limit=5)
 
@@ -70,15 +56,15 @@ def test_mcp_therapist_search_success(monkeypatch):
 def test_mcp_therapist_search_omits_empty_specialty(monkeypatch):
     captured: dict[str, object] = {}
 
-    def capture_post(*args, **kwargs):
-        captured["json"] = kwargs.get("json")
-        return DummyResponse({"ok": True, "results": []})
+    async def capture_tool(_tool_suffix, payload):
+        captured["payload"] = payload
+        return []
 
-    monkeypatch.setattr(mcp_client.httpx, "post", capture_post)
+    monkeypatch.setattr(mcp_client, "ainvoke_mcp_tool", capture_tool)
 
     mcp_client.mcp_therapist_search("Stockholm", radius_km=5, specialty="", limit=5)
 
-    payload = captured["json"]
+    payload = captured["payload"]
     assert isinstance(payload, dict)
     assert "specialty" not in payload
 
@@ -86,28 +72,24 @@ def test_mcp_therapist_search_omits_empty_specialty(monkeypatch):
 def test_mcp_therapist_search_omits_none_specialty(monkeypatch):
     captured: dict[str, object] = {}
 
-    def capture_post(*args, **kwargs):
-        captured["json"] = kwargs.get("json")
-        return DummyResponse({"ok": True, "results": []})
+    async def capture_tool(_tool_suffix, payload):
+        captured["payload"] = payload
+        return []
 
-    monkeypatch.setattr(mcp_client.httpx, "post", capture_post)
+    monkeypatch.setattr(mcp_client, "ainvoke_mcp_tool", capture_tool)
 
     mcp_client.mcp_therapist_search("Stockholm", radius_km=5, specialty=None, limit=5)
 
-    payload = captured["json"]
+    payload = captured["payload"]
     assert isinstance(payload, dict)
     assert "specialty" not in payload
 
 
 def test_mcp_therapist_search_invalid_argument_schema(monkeypatch):
-    monkeypatch.setattr(
-        mcp_client.httpx,
-        "post",
-        lambda *args, **kwargs: DummyResponse(
-            {"ok": True, "results": [{"name": "only_name"}]},
-            status_code=200
-        )
-    )
+    async def bad_tool(*args, **kwargs):
+        return [{"name": "only_name"}]
+
+    monkeypatch.setattr(mcp_client, "ainvoke_mcp_tool", bad_tool)
 
     with pytest.raises(HTTPException) as exc:
         mcp_client.mcp_therapist_search("Stockholm")
@@ -116,21 +98,10 @@ def test_mcp_therapist_search_invalid_argument_schema(monkeypatch):
 
 
 def test_mcp_therapist_search_invalid_argument_error_payload(monkeypatch):
-    monkeypatch.setattr(
-        mcp_client.httpx,
-        "post",
-        lambda *args, **kwargs: DummyResponse(
-            {
-                "ok": False,
-                "error": {
-                    "code": "INVALID_ARGUMENT",
-                    "message": "location_text is required",
-                    "details": {}
-                }
-            },
-            status_code=400
-        )
-    )
+    async def failing_tool(*args, **kwargs):
+        raise RuntimeError("INVALID_ARGUMENT: location_text is required")
+
+    monkeypatch.setattr(mcp_client, "ainvoke_mcp_tool", failing_tool)
 
     with pytest.raises(HTTPException) as exc:
         mcp_client.mcp_therapist_search("Stockholm")
@@ -143,10 +114,10 @@ def test_therapists_route_mcp_timeout_returns_502(monkeypatch, test_db):
     client = TestClient(app)
     client.cookies.set(settings.session_cookie_name, str(premium_user.id))
 
-    def timeout_post(*args, **kwargs):
-        raise httpx.ReadTimeout("timeout")
+    async def timeout_tool(*args, **kwargs):
+        raise mcp_client.httpx.ReadTimeout("timeout")
 
-    monkeypatch.setattr(mcp_client.httpx, "post", timeout_post)
+    monkeypatch.setattr(mcp_client, "ainvoke_mcp_tool", timeout_tool)
 
     response = client.post("/therapists/search", json={"location": "Stockholm", "radius_km": 5})
 

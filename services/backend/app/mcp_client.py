@@ -1,8 +1,11 @@
+from __future__ import annotations
+
+import asyncio
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 from fastapi import HTTPException
-from jsonschema import ValidationError, validate
 
 from .config import settings
 from .schemas import TherapistResult
@@ -12,125 +15,118 @@ class MCPClientError(RuntimeError):
     pass
 
 
-THERAPIST_SEARCH_SUCCESS_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "ok": {"const": True},
-        "results": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "address": {"type": "string"},
-                    "distance_km": {"type": ["number", "null"]},
-                    "phone": {"type": ["string", "null"]},
-                    "email": {"type": ["string", "null"]},
-                    "source_url": {"type": ["string", "null"]}
-                },
-                "required": ["name", "address", "distance_km", "phone", "email", "source_url"],
-                "additionalProperties": False
-            }
-        }
-    },
-    "required": ["ok", "results"],
-    "additionalProperties": False
-}
+_mcp_client: Any | None = None
+_mcp_tools: list[Any] | None = None
 
-TOOL_ERROR_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "ok": {"const": False},
-        "error": {
-            "type": "object",
-            "properties": {
-                "code": {"type": "string"},
-                "message": {"type": "string"},
-                "details": {"type": "object"}
-            },
-            "required": ["code", "message", "details"],
-            "additionalProperties": False
-        }
-    },
-    "required": ["ok", "error"],
-    "additionalProperties": False
-}
 
-SEND_EMAIL_SUCCESS_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "ok": {"const": True},
-        "message_id": {"type": ["string", "null"]}
-    },
-    "required": ["ok", "message_id"],
-    "additionalProperties": False
-}
+def _import_mcp_adapters() -> tuple[type[Any], Any]:
+    try:
+        from langchain_mcp_adapters.client import MultiServerMCPClient
+        from langchain_mcp_adapters.tools import load_mcp_tools
+    except ImportError as exc:
+        raise MCPClientError(
+            "langchain-mcp-adapters is not installed. Install backend dependencies to use MCP tools."
+        ) from exc
+    return MultiServerMCPClient, load_mcp_tools
+
+
+def _mcp_health_url() -> str:
+    parsed = urlparse(settings.mcp_base_url)
+    path = parsed.path.rstrip("/")
+    health_path = path[:-4] + "/health" if path.endswith("/mcp") else "/health"
+    return urlunparse(parsed._replace(path=health_path, params="", query="", fragment=""))
 
 
 def probe_mcp_health() -> bool:
     if not settings.mcp_base_url:
         return False
     try:
-        response = httpx.get(f"{settings.mcp_base_url}/health", timeout=0.8)
+        response = httpx.get(_mcp_health_url(), timeout=0.8)
         return response.status_code == 200
     except httpx.HTTPError:
         return False
 
 
-def mcp_therapist_search(
+def _get_client() -> Any:
+    global _mcp_client
+    if _mcp_client is None:
+        MultiServerMCPClient, _ = _import_mcp_adapters()
+        _mcp_client = MultiServerMCPClient(
+            {
+                "mh": {
+                    "transport": "streamable_http",
+                    "url": settings.mcp_base_url,
+                }
+            }
+        )
+    return _mcp_client
+
+
+async def _load_tools() -> list[Any]:
+    global _mcp_tools
+    if _mcp_tools is None:
+        client = _get_client()
+        _, load_mcp_tools = _import_mcp_adapters()
+        async with client.session("mh") as session:
+            _mcp_tools = await load_mcp_tools(session)
+    return _mcp_tools
+
+
+async def get_mcp_tools() -> list[Any]:
+    return list(await _load_tools())
+
+
+def _run_async(coro: Any) -> Any:
+    return asyncio.run(coro)
+
+
+async def _get_tool_by_suffix(suffix: str) -> Any:
+    tools = await _load_tools()
+    for tool in tools:
+        if tool.name.endswith(suffix):
+            return tool
+    raise MCPClientError(f"MCP tool not found: {suffix}")
+
+
+async def ainvoke_mcp_tool(tool_suffix: str, payload: dict[str, Any]) -> Any:
+    tool = await _get_tool_by_suffix(tool_suffix)
+    return await tool.ainvoke(payload)
+
+
+async def amcp_therapist_search(
     location_text: str,
     radius_km: int | None = None,
     specialty: str | None = None,
-    limit: int = 10
+    limit: int = 10,
 ) -> list[TherapistResult]:
     normalized_specialty = specialty.strip() if isinstance(specialty, str) else None
     if normalized_specialty == "":
         normalized_specialty = None
-    normalized_radius = min(max(radius_km or 25, 1), 50)
-    normalized_limit = min(max(limit, 1), 10)
     payload: dict[str, Any] = {
         "location_text": location_text,
-        "radius_km": normalized_radius,
-        "limit": normalized_limit
+        "radius_km": min(max(radius_km or 25, 1), 50),
+        "limit": min(max(limit, 1), 10),
     }
     if normalized_specialty:
         payload["specialty"] = normalized_specialty
-
     try:
-        response = httpx.post(
-            f"{settings.mcp_base_url}/tools/therapist_search",
-            json=payload,
-            timeout=8.0
-        )
+        results = await ainvoke_mcp_tool("therapist_search_tool", payload)
     except httpx.TimeoutException as exc:
         raise HTTPException(status_code=502, detail="mcp therapist_search request timed out") from exc
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail="mcp therapist_search request failed") from exc
-
-    try:
-        body = response.json()
-    except ValueError as exc:
-        raise HTTPException(status_code=502, detail="invalid mcp response body") from exc
-
-    if response.status_code >= 400:
-        try:
-            validate(instance=body, schema=TOOL_ERROR_SCHEMA)
-            code = body["error"]["code"]
-            message = body["error"]["message"]
-            raise HTTPException(
-                status_code=502,
-                detail=f"mcp therapist_search error ({code}): {message}"
-            )
-        except ValidationError:
-            raise HTTPException(status_code=502, detail="mcp therapist_search returned invalid error payload")
-
-    try:
-        validate(instance=body, schema=THERAPIST_SEARCH_SUCCESS_SCHEMA)
-    except ValidationError as exc:
-        raise HTTPException(status_code=502, detail="invalid mcp therapist_search payload") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"mcp therapist_search failed: {exc}") from exc
+    if not isinstance(results, list):
+        raise HTTPException(status_code=502, detail="invalid mcp therapist_search payload")
 
     normalized: list[TherapistResult] = []
-    for result in body["results"]:
+    for result in results:
+        if not isinstance(result, dict):
+            raise HTTPException(status_code=502, detail="invalid mcp therapist_search payload")
+        required = {"name", "address", "distance_km", "phone", "email", "source_url"}
+        if not required.issubset(result.keys()):
+            raise HTTPException(status_code=502, detail="invalid mcp therapist_search payload")
         normalized.append(
             TherapistResult(
                 name=result["name"],
@@ -145,46 +141,40 @@ def mcp_therapist_search(
     return normalized
 
 
+def mcp_therapist_search(
+    location_text: str,
+    radius_km: int | None = None,
+    specialty: str | None = None,
+    limit: int = 10,
+) -> list[TherapistResult]:
+    return _run_async(amcp_therapist_search(location_text, radius_km, specialty, limit))
+
+
+async def amcp_send_email(
+    to: str,
+    subject: str,
+    body: str,
+    reply_to: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"to": to, "subject": subject, "body": body}
+    if reply_to:
+        payload["reply_to"] = reply_to
+    try:
+        result = await ainvoke_mcp_tool("send_email_tool", payload)
+    except httpx.TimeoutException as exc:
+        raise MCPClientError("mcp send_email request timed out") from exc
+    except Exception as exc:
+        raise MCPClientError(f"mcp send_email failed: {exc}") from exc
+    if not isinstance(result, dict) or "message_id" not in result:
+        raise MCPClientError("invalid mcp send_email payload")
+    return {"ok": True, **result}
+
+
 def mcp_send_email(
     to: str,
     subject: str,
     body: str,
-    reply_to: str | None = None
+    reply_to: str | None = None,
 ) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "to": to,
-        "subject": subject,
-        "body": body
-    }
-    if reply_to:
-        payload["reply_to"] = reply_to
+    return _run_async(amcp_send_email(to=to, subject=subject, body=body, reply_to=reply_to))
 
-    try:
-        response = httpx.post(
-            f"{settings.mcp_base_url}/tools/send_email",
-            json=payload,
-            timeout=8.0
-        )
-    except httpx.TimeoutException as exc:
-        raise MCPClientError("mcp send_email request timed out") from exc
-    except httpx.HTTPError as exc:
-        raise MCPClientError("mcp send_email request failed") from exc
-
-    try:
-        body_json = response.json()
-    except ValueError as exc:
-        raise MCPClientError("invalid mcp send_email response body") from exc
-
-    if response.status_code >= 400:
-        try:
-            validate(instance=body_json, schema=TOOL_ERROR_SCHEMA)
-        except ValidationError as exc:
-            raise MCPClientError("mcp send_email returned invalid error payload") from exc
-        error = body_json["error"]
-        raise MCPClientError(f"mcp send_email error ({error['code']}): {error['message']}")
-
-    try:
-        validate(instance=body_json, schema=SEND_EMAIL_SUCCESS_SCHEMA)
-    except ValidationError as exc:
-        raise MCPClientError("invalid mcp send_email payload") from exc
-    return body_json
