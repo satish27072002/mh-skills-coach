@@ -16,12 +16,9 @@ class Settings(BaseSettings):
     therapist_search_limit: int = 10
     demo_mode: bool = False
     dev_mode: bool = False
-    llm_provider: Literal["ollama", "openai", "mock"] = "ollama"
-    embed_provider: Literal["ollama", "openai", "mock"] = "ollama"
+    llm_provider: Literal["openai", "mock"] = "openai"
+    embed_provider: Literal["openai", "mock"] = "openai"
     llm_temperature: float = 0.1
-    ollama_base_url: str = "http://ollama:11434"
-    ollama_model: str = "gemma2:2b"
-    ollama_embed_model: str = "nomic-embed-text"
     openai_api_key: str | None = None
     openai_chat_model: str = "gpt-4o-mini"
     openai_embed_model: str = "text-embedding-3-small"

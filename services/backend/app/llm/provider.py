@@ -78,86 +78,6 @@ class LlmEmbeddingProvider(Protocol):
         ...
 
 
-class OllamaProvider:
-    def __init__(
-        self,
-        base_url: str,
-        chat_model: str,
-        embed_model: str
-    ) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.chat_model = chat_model
-        self.embed_model = embed_model
-
-    def generate_chat(
-        self,
-        messages: list[dict[str, str]],
-        system_prompt: str | None = None,
-        **kwargs: Any
-    ) -> str:
-        timeout = kwargs.pop("timeout", 180.0)
-        payload_messages = list(messages)
-        if system_prompt:
-            payload_messages.insert(0, {"role": "system", "content": system_prompt})
-        payload = {
-            "model": self.chat_model,
-            "stream": False,
-            "keep_alive": kwargs.pop("keep_alive", "10m"),
-            "messages": payload_messages
-        }
-        try:
-            response = httpx.post(
-                f"{self.base_url}/api/chat",
-                json=payload,
-                timeout=timeout
-            )
-            response.raise_for_status()
-        except httpx.TimeoutException as exc:
-            raise ProviderError("Ollama chat request timed out.") from exc
-        except httpx.HTTPError as exc:
-            raise ProviderError("Ollama chat request failed.") from exc
-
-        data = response.json()
-        content = data.get("message", {}).get("content") or data.get("response")
-        if not content:
-            raise ProviderError("Ollama chat response missing content.")
-        return str(content)
-
-    def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        if not texts:
-            return []
-        vectors: list[list[float]] = []
-        for text in texts:
-            last_timeout: Exception | None = None
-            for attempt in range(3):
-                try:
-                    response = httpx.post(
-                        f"{self.base_url}/api/embeddings",
-                        json={"model": self.embed_model, "prompt": text},
-                        timeout=60.0
-                    )
-                    response.raise_for_status()
-                    data = response.json()
-                    embedding = data.get("embedding")
-                    if not isinstance(embedding, list):
-                        raise ProviderError("Ollama embeddings response missing vector.")
-                    vectors.append([float(value) for value in embedding])
-                    break
-                except (httpx.ReadTimeout, httpx.ConnectError) as exc:
-                    last_timeout = exc
-                    if attempt == 2:
-                        raise ProviderError("Ollama embeddings request timed out.") from exc
-                except httpx.TimeoutException as exc:
-                    last_timeout = exc
-                    if attempt == 2:
-                        raise ProviderError("Ollama embeddings request timed out.") from exc
-                except httpx.HTTPError as exc:
-                    raise ProviderError("Ollama embeddings request failed.") from exc
-            else:
-                raise ProviderError("Ollama embeddings request timed out.") from last_timeout
-        return vectors
-
-
 class OpenAIProvider:
     def __init__(
         self,
@@ -305,40 +225,28 @@ def validate_provider_configuration() -> None:
 def get_llm_provider() -> LlmEmbeddingProvider:
     if settings.llm_provider == "mock":
         return MockProvider(settings.embedding_dim or 1536)
-    if settings.llm_provider == "openai":
-        if not settings.openai_api_key and settings.dev_mode:
-            raise ProviderNotConfiguredError(
-                "LLM not configured. Set OPENAI_API_KEY or use LLM_PROVIDER=mock."
-            )
-        return OpenAIProvider(
-            api_key=settings.openai_api_key,
-            chat_model=settings.openai_chat_model,
-            embed_model=settings.openai_embed_model
+    if not settings.openai_api_key and settings.dev_mode:
+        raise ProviderNotConfiguredError(
+            "LLM not configured. Set OPENAI_API_KEY or use LLM_PROVIDER=mock."
         )
-    return OllamaProvider(
-        base_url=settings.ollama_base_url,
-        chat_model=settings.ollama_model,
-        embed_model=settings.ollama_embed_model
+    return OpenAIProvider(
+        api_key=settings.openai_api_key,
+        chat_model=settings.openai_chat_model,
+        embed_model=settings.openai_embed_model
     )
 
 
 def get_embed_provider() -> LlmEmbeddingProvider:
     if settings.embed_provider == "mock":
         return MockProvider(settings.embedding_dim or 1536)
-    if settings.embed_provider == "openai":
-        if not settings.openai_api_key and settings.dev_mode:
-            raise ProviderNotConfiguredError(
-                "Embedding not configured. Set OPENAI_API_KEY or use EMBED_PROVIDER=mock."
-            )
-        return OpenAIProvider(
-            api_key=settings.openai_api_key,
-            chat_model=settings.openai_chat_model,
-            embed_model=settings.openai_embed_model
+    if not settings.openai_api_key and settings.dev_mode:
+        raise ProviderNotConfiguredError(
+            "Embedding not configured. Set OPENAI_API_KEY or use EMBED_PROVIDER=mock."
         )
-    return OllamaProvider(
-        base_url=settings.ollama_base_url,
-        chat_model=settings.ollama_model,
-        embed_model=settings.ollama_embed_model
+    return OpenAIProvider(
+        api_key=settings.openai_api_key,
+        chat_model=settings.openai_chat_model,
+        embed_model=settings.openai_embed_model
     )
 
 
@@ -404,14 +312,6 @@ def generate_chat(
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
     return get_embed_provider().embed_texts(texts)
-
-
-def probe_ollama_connectivity(timeout: float = 0.8) -> bool:
-    try:
-        response = httpx.get(f"{settings.ollama_base_url}/api/tags", timeout=timeout)
-        return response.status_code == 200
-    except httpx.HTTPError:
-        return False
 
 
 def probe_openai_connectivity(timeout: float = 8.0) -> dict:

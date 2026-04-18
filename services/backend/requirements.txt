@@ -15,8 +15,6 @@ google-auth==2.33.0
 requests==2.32.3
 langchain-core==0.3.36
 langchain-openai==0.2.14
-langchain-ollama==0.2.3
-ollama==0.6.1
 langchain-mcp-adapters==0.1.4
 langgraph==0.2.39
 langgraph-checkpoint==2.1.2
