@@ -40,11 +40,11 @@ def test_raises_when_configured_dim_mismatches_known_openai_model(monkeypatch):
         get_active_embedding_dim()
 
 
-def test_ollama_defaults_to_legacy_dim_when_unset(monkeypatch):
-    monkeypatch.setattr(settings, "embed_provider", "ollama")
+def test_mock_defaults_when_unset(monkeypatch):
+    monkeypatch.setattr(settings, "embed_provider", "mock")
     monkeypatch.setattr(settings, "embedding_dim", None)
 
     dim = get_active_embedding_dim()
 
-    assert dim == 768
-    assert get_cached_embedding_dim() == 768
+    assert dim == 1536
+    assert get_cached_embedding_dim() == 1536

@@ -6,7 +6,6 @@ from .config import settings
 from .llm.provider import embed_texts
 
 
-DEFAULT_OLLAMA_EMBED_DIM = 768
 DEFAULT_MOCK_EMBED_DIM = 1536
 OPENAI_MODEL_DIMENSIONS: dict[str, int] = {
     "text-embedding-3-small": 1536,
@@ -38,8 +37,6 @@ def get_active_embedding_dim(
 
     if provider == "mock":
         return configured_dim or DEFAULT_MOCK_EMBED_DIM
-    if provider != "openai":
-        return configured_dim or DEFAULT_OLLAMA_EMBED_DIM
 
     expected_dim = OPENAI_MODEL_DIMENSIONS.get(settings.openai_embed_model)
     if configured_dim is not None:
@@ -67,6 +64,4 @@ def get_cached_embedding_dim() -> int | None:
         return settings.embedding_dim
     if settings.embed_provider == "mock":
         return DEFAULT_MOCK_EMBED_DIM
-    if settings.embed_provider == "openai":
-        return _detected_embedding_dim
-    return DEFAULT_OLLAMA_EMBED_DIM
+    return _detected_embedding_dim
