@@ -5,7 +5,6 @@ from .provider import (
     generate_chat,
     get_embed_provider,
     get_llm_provider,
-    probe_ollama_connectivity,
     probe_openai_connectivity,
     validate_provider_configuration,
 )
@@ -17,7 +16,6 @@ __all__ = [
     "generate_chat",
     "get_embed_provider",
     "get_llm_provider",
-    "probe_ollama_connectivity",
     "probe_openai_connectivity",
     "validate_provider_configuration",
 ]
