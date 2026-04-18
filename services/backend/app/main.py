@@ -47,7 +47,6 @@ from .embed_dimension import get_active_embedding_dim, get_cached_embedding_dim
 from .email_orchestrator import EmailSendPayload, send_email_for_user
 from .llm.provider import (
     ConfigurationError,
-    probe_ollama_connectivity,
     probe_openai_connectivity,
     validate_provider_configuration,
 )
@@ -516,16 +515,14 @@ def status() -> dict[str, Any]:
     embed_provider = settings.embed_provider
     pg_ready = pgvector_ready()
     openai_enabled = llm_provider == "openai" or embed_provider == "openai"
-    ollama_enabled = llm_provider == "ollama" or embed_provider == "ollama"
     openai_probe = probe_openai_connectivity() if openai_enabled else {"ok": False, "reason": "not_enabled"}
     openai_ok: bool = openai_probe["ok"]
     openai_reason: str = openai_probe["reason"]
-    ollama_ok = probe_ollama_connectivity() if ollama_enabled else False
     mcp_ok = probe_mcp_health() if settings.mcp_base_url else False
     if llm_provider == "mock":
         llm_ok = True
     else:
-        llm_ok = openai_ok if llm_provider == "openai" else ollama_ok
+        llm_ok = openai_ok
     agent_mode = "llm_rag" if llm_ok and pg_ready else "deterministic"
     if not pg_ready:
         reason = "pgvector not ready"
@@ -537,8 +534,6 @@ def status() -> dict[str, Any]:
     if llm_ok:
         if llm_provider == "openai":
             model = settings.openai_chat_model
-        elif llm_provider == "ollama":
-            model = settings.ollama_model
         else:
             model = "mock"
     provider_warnings: list[str] = []
@@ -554,9 +549,7 @@ def status() -> dict[str, Any]:
         "embed_dim": get_cached_embedding_dim(),
         "openai_ok": openai_ok,
         "openai_reason": openai_reason,
-        "ollama_ok": ollama_ok,
         "mcp_ok": mcp_ok,
-        "ollama_reachable": ollama_ok,
         "pgvector_ready": pg_ready,
         "model": model,
         "reason": reason,

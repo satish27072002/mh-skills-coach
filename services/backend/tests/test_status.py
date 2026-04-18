@@ -11,13 +11,14 @@ from app.llm.provider import ConfigurationError
 
 
 def test_status_endpoint_returns_mode_and_pgvector_flag(monkeypatch):
-    monkeypatch.setattr(settings, "llm_provider", "ollama")
-    monkeypatch.setattr(settings, "embed_provider", "ollama")
-    monkeypatch.setattr(settings, "embedding_dim", 768)
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "embed_provider", "openai")
+    monkeypatch.setattr(settings, "embedding_dim", 1536)
+    monkeypatch.setattr(settings, "openai_api_key", None)
     monkeypatch.setattr(settings, "dev_mode", False)
     monkeypatch.setattr(settings, "mcp_base_url", "http://mcp:7000")
     monkeypatch.setattr(main, "pgvector_ready", lambda: False)
-    monkeypatch.setattr(main, "probe_ollama_connectivity", lambda *args, **kwargs: False)
+    monkeypatch.setattr(main, "probe_openai_connectivity", lambda *args, **kwargs: {"ok": False, "reason": "no_api_key"})
     monkeypatch.setattr(main, "probe_mcp_health", lambda *args, **kwargs: True)
     client = TestClient(main.app)
 
@@ -26,27 +27,26 @@ def test_status_endpoint_returns_mode_and_pgvector_flag(monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert payload["agent_mode"] == "deterministic"
-    assert payload["llm_provider"] == "ollama"
-    assert payload["embed_provider"] == "ollama"
+    assert payload["llm_provider"] == "openai"
+    assert payload["embed_provider"] == "openai"
     assert payload["openai_ok"] is False
-    assert payload["ollama_ok"] is False
     assert payload["mcp_ok"] is True
-    assert payload["ollama_reachable"] is False
-    assert payload["embed_dim"] == 768
+    assert payload["embed_dim"] == 1536
     assert payload["pgvector_ready"] is False
     assert payload["model"] is None
     assert "reason" in payload
-    assert payload["provider_warnings"] == []
+    assert payload["provider_warnings"]
 
 
-def test_status_switches_when_ollama_and_pgvector_ready(monkeypatch):
-    monkeypatch.setattr(settings, "llm_provider", "ollama")
-    monkeypatch.setattr(settings, "embed_provider", "ollama")
-    monkeypatch.setattr(settings, "embedding_dim", 768)
+def test_status_reports_openai_provider_fields(monkeypatch):
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "embed_provider", "openai")
+    monkeypatch.setattr(settings, "embedding_dim", 1536)
     monkeypatch.setattr(settings, "dev_mode", False)
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
     monkeypatch.setattr(settings, "mcp_base_url", "http://mcp:7000")
     monkeypatch.setattr(main, "pgvector_ready", lambda: True)
-    monkeypatch.setattr(main, "probe_ollama_connectivity", lambda *args, **kwargs: True)
+    monkeypatch.setattr(main, "probe_openai_connectivity", lambda *args, **kwargs: {"ok": True, "reason": "ok"})
     monkeypatch.setattr(main, "probe_mcp_health", lambda *args, **kwargs: True)
     client = TestClient(main.app)
 
@@ -54,14 +54,12 @@ def test_status_switches_when_ollama_and_pgvector_ready(monkeypatch):
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["ollama_reachable"] is True
-    assert payload["ollama_ok"] is True
-    assert payload["openai_ok"] is False
+    assert payload["openai_ok"] is True
     assert payload["mcp_ok"] is True
-    assert payload["embed_dim"] == 768
+    assert payload["embed_dim"] == 1536
     assert payload["pgvector_ready"] is True
     assert payload["agent_mode"] == "llm_rag"
-    assert payload["model"] is not None
+    assert payload["model"] == settings.openai_chat_model
     assert payload["provider_warnings"] == []
 
 
@@ -84,7 +82,6 @@ def test_status_switches_when_openai_and_pgvector_ready(monkeypatch):
     assert payload["llm_provider"] == "openai"
     assert payload["embed_provider"] == "openai"
     assert payload["openai_ok"] is True
-    assert payload["ollama_ok"] is False
     assert payload["mcp_ok"] is True
     assert payload["embed_dim"] == 1536
     assert payload["pgvector_ready"] is True
@@ -95,7 +92,7 @@ def test_status_switches_when_openai_and_pgvector_ready(monkeypatch):
 
 def test_startup_fails_fast_for_openai_without_api_key(monkeypatch, caplog):
     monkeypatch.setattr(settings, "llm_provider", "openai")
-    monkeypatch.setattr(settings, "embed_provider", "ollama")
+    monkeypatch.setattr(settings, "embed_provider", "mock")
     monkeypatch.setattr(settings, "openai_api_key", None)
     monkeypatch.setattr(settings, "dev_mode", False)
 
@@ -125,9 +122,10 @@ def test_startup_allows_openai_missing_key_in_dev_mode(monkeypatch):
 
 
 def test_startup_fails_fast_on_embedding_dimension_mismatch(monkeypatch):
-    monkeypatch.setattr(settings, "llm_provider", "ollama")
-    monkeypatch.setattr(settings, "embed_provider", "ollama")
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "embed_provider", "openai")
     monkeypatch.setattr(settings, "embedding_dim", 1536)
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
     monkeypatch.setattr(main, "init_db", lambda: None)
     monkeypatch.setattr(main, "ensure_embedding_dimension_compatible", lambda: (_ for _ in ()).throw(RuntimeError("mismatch")))
 
