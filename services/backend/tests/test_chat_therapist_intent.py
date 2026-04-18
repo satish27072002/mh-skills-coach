@@ -131,30 +131,21 @@ def test_chat_therapist_search_omits_specialty_when_not_provided(monkeypatch, th
 
     captured: dict[str, object] = {}
 
-    class DummyResponse:
-        status_code = 200
-
-        @staticmethod
-        def json():
-            return {
-                "ok": True,
-                "results": [
-                    {
-                        "name": "Payload Clinic",
-                        "address": "4 Main St, Stockholm",
-                        "distance_km": 2.2,
-                        "phone": "+46 8 333 333",
-                        "email": None,
-                        "source_url": "https://example.com/payload",
-                    }
-                ],
+    async def capture_tool(tool_suffix: str, payload: dict[str, object]):
+        captured["tool_suffix"] = tool_suffix
+        captured["json"] = payload
+        return [
+            {
+                "name": "Payload Clinic",
+                "address": "4 Main St, Stockholm",
+                "distance_km": 2.2,
+                "phone": "+46 8 333 333",
+                "email": None,
+                "source_url": "https://example.com/payload",
             }
+        ]
 
-    def capture_post(*args, **kwargs):
-        captured["json"] = kwargs.get("json")
-        return DummyResponse()
-
-    monkeypatch.setattr(mcp_client.httpx, "post", capture_post)
+    monkeypatch.setattr(mcp_client, "ainvoke_mcp_tool", capture_tool)
     client = TestClient(app)
     client.cookies.set(settings.session_cookie_name, str(user.id))
 
@@ -163,6 +154,7 @@ def test_chat_therapist_search_omits_specialty_when_not_provided(monkeypatch, th
     assert response.status_code == 200
     payload = response.json()
     assert payload.get("therapists")
+    assert captured.get("tool_suffix") == "therapist_search_tool"
     outbound = captured.get("json")
     assert isinstance(outbound, dict)
     assert outbound["location_text"] == "Stockholm"

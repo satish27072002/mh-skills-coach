@@ -1016,6 +1016,8 @@ def chat(
                 pending_action=pending_action,
                 pending_expired=pending_expired,
                 request=request,
+                therapist_search_fn=_run_therapist_search,
+                send_email_fn=send_email_for_user,
             ),
         )
     log_event("llm_call", route="LANGGRAPH_SUPERVISOR", duration_ms=round(t.elapsed_ms), correlation_id=correlation_id)

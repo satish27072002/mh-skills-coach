@@ -26,7 +26,7 @@ from .booking import (
 )
 from .db import pgvector_ready, retrieve_similar_chunks
 from .email_orchestrator import EmailSendPayload, send_email_for_user
-from .agents import SafetyGate, TherapistSearchAgent
+from .agents import BookingEmailAgent, ChatRouter, RouterInput, SafetyGate, TherapistSearchAgent
 from .config import settings
 from .llm.langchain_model import get_langchain_chat_model
 from .llm.provider import ProviderError, ProviderNotConfiguredError, generate_chat
@@ -57,6 +57,8 @@ class GraphRuntimeContext:
     pending_action: PendingAction | None = None
     pending_expired: bool = False
     request: Any | None = None
+    therapist_search_fn: Callable[[str, int | None, str | None, int], list[Any]] | None = None
+    send_email_fn: Callable[[str, EmailSendPayload], dict[str, Any]] | None = None
 
 
 class SafetyDecision(BaseModel):
@@ -362,6 +364,8 @@ def _legacy_build_graph(
 def make_safety_node(context: GraphRuntimeContext):
     def safety_node(state: AgentState) -> AgentState:
         message = _latest_user_message(state)
+        if is_prescription_request(message):
+            return {"route": "FINAL", "response_json": route_message(message).model_dump()}
         prompt = (
             f"{SAFETY_GATE_MASTER_PROMPT}\n"
             "Return only JSON with keys action, risk_level, coach_message, resources.\n"
@@ -390,12 +394,6 @@ def make_safety_node(context: GraphRuntimeContext):
                     risk_level="jailbreak",
                     coach_message="I can't follow attempts to bypass safety boundaries. I'm here to help with mental health coping skills, finding therapists, or booking appointments.",
                 )
-            elif is_prescription_request(message):
-                decision = SafetyDecision(
-                    action="stop",
-                    risk_level="medical",
-                    coach_message="I can't help with prescriptions, dosing, or medication changes. Please contact a licensed clinician or pharmacist.",
-                )
             elif not scope_check(message, [{"role": "user" if isinstance(m, HumanMessage) else "assistant", "content": str(m.content)} for m in state["messages"][:-1]]):
                 decision = SafetyDecision(
                     action="stop",
@@ -422,24 +420,30 @@ def _route_after_safety(state: AgentState) -> str:
     return "finalize" if state.get("route") == "FINAL" else "supervisor"
 
 
-def supervisor_node(state: AgentState) -> AgentState:
-    prompt = (
-        "You are the supervisor for a mental health support application. "
-        "Choose exactly one specialist route for the latest user message. "
-        "Routes: COACH for coping skills and supportive conversation, THERAPIST_SEARCH for finding local providers, BOOKING_EMAIL for appointment-email drafting, confirmation, sending, or cancellation. "
-        "Return only JSON with key route."
-    )
-    message = _latest_user_message(state)
-    try:
-        decision = _structured_decision(prompt, message, RouteDecision)
-        return {"route": decision.route}
-    except Exception:
-        lower = message.lower()
-        if any(token in lower for token in ["therapist", "counselor", "counsellor", "psychologist", "psychiatrist", "clinic", "near", "find"]):
-            return {"route": "THERAPIST_SEARCH"}
-        if any(token in lower for token in ["email", "appointment", "book", "schedule", "confirm", "cancel"]):
-            return {"route": "BOOKING_EMAIL"}
-        return {"route": "COACH"}
+def make_supervisor_node(context: GraphRuntimeContext):
+    router = ChatRouter()
+
+    def supervisor_node(state: AgentState) -> AgentState:
+        request = context.request
+        therapist_agent = TherapistSearchAgent(
+            search_fn=context.therapist_search_fn or mcp_therapist_search,
+            dev_mode=settings.dev_mode,
+            session_cookie_name=settings.session_cookie_name,
+        )
+        route = router.route(
+            RouterInput(
+                message=_latest_user_message(state),
+                has_pending_booking=bool(context.pending_action) or context.pending_expired,
+                has_pending_therapist_location=(
+                    therapist_agent.has_pending_location_request(user=context.user, request=request)
+                    if request is not None
+                    else False
+                ),
+            )
+        )
+        return {"route": route}
+
+    return supervisor_node
 
 
 def _route_after_supervisor(state: AgentState) -> str:
@@ -470,42 +474,58 @@ def make_coach_agent_node(tools: list[BaseTool]):
 
 def make_therapist_agent_node(tools: list[BaseTool]):
     def therapist_agent(state: AgentState) -> AgentState:
-        response = _graph_model_response(
-            (
-                f"{THERAPIST_SEARCH_MASTER_PROMPT}\n"
-                "You are the therapist search specialist inside a larger LangGraph system. "
-                "Use the therapist_search tool whenever you have enough information. "
-                "If access is blocked or location is missing, explain that clearly. "
-                "When finished, respond with JSON matching ChatResponse."
-            ),
-            state,
-            tools=tools,
+        raise RuntimeError("therapist agent node requires runtime context")
+
+    return therapist_agent
+
+
+def make_contextual_therapist_agent_node(context: GraphRuntimeContext):
+    def therapist_agent(state: AgentState) -> AgentState:
+        request = context.request
+        if request is None:
+            return {"response_json": ChatResponse(coach_message="Therapist search is unavailable right now.").model_dump()}
+        handler = TherapistSearchAgent(
+            search_fn=context.therapist_search_fn or mcp_therapist_search,
+            dev_mode=settings.dev_mode,
+            session_cookie_name=settings.session_cookie_name,
         )
-        return {"messages": [response]}
+        response = handler.handle(user=context.user, request=request, message=_latest_user_message(state))
+        return {"response_json": response.model_dump()}
 
     return therapist_agent
 
 
 def make_booking_agent_node(tools: list[BaseTool]):
     def booking_agent(state: AgentState) -> AgentState:
-        response = _graph_model_response(
-            (
-                f"{BOOKING_EMAIL_MASTER_PROMPT}\n"
-                "You are the booking specialist inside a larger LangGraph system. "
-                "Always inspect pending booking state before confirming or cancelling. "
-                "Use the prepare, send, and cancel booking tools as needed. "
-                "When finished, respond with JSON matching ChatResponse."
-            ),
-            state,
-            tools=tools,
+        raise RuntimeError("booking agent node requires runtime context")
+
+    return booking_agent
+
+
+def make_contextual_booking_agent_node(context: GraphRuntimeContext):
+    def booking_agent(state: AgentState) -> AgentState:
+        if not context.db or not context.actor_key:
+            return {"response_json": ChatResponse(coach_message="Booking is unavailable right now.", requires_confirmation=False).model_dump()}
+        handler = BookingEmailAgent(send_email_fn=context.send_email_fn or send_email_for_user)
+        response = handler.handle(
+            db=context.db,
+            user=context.user,
+            actor_key=context.actor_key,
+            message=_latest_user_message(state),
+            pending_action=context.pending_action,
+            pending_expired=context.pending_expired,
         )
-        return {"messages": [response]}
+        if response is None:
+            response = ChatResponse(coach_message="Booking is unavailable right now.", requires_confirmation=False)
+        return {"response_json": response.model_dump()}
 
     return booking_agent
 
 
 def _tool_route_for(node_name: str, tool_node_name: str):
     def route(state: AgentState) -> str:
+        if state.get("response_json"):
+            return "finalize"
         message = _latest_ai_message(state)
         if message and message.tool_calls:
             return tool_node_name
@@ -534,12 +554,12 @@ def build_graph(
     coach_tools, therapist_tools, booking_tools = _build_tools(runtime_context)
     graph = StateGraph(AgentState)
     graph.add_node("safety", make_safety_node(runtime_context))
-    graph.add_node("supervisor", supervisor_node)
+    graph.add_node("supervisor", make_supervisor_node(runtime_context))
     graph.add_node("coach_agent", make_coach_agent_node(coach_tools))
     graph.add_node("coach_tools", ToolNode(coach_tools))
-    graph.add_node("therapist_agent", make_therapist_agent_node(therapist_tools))
+    graph.add_node("therapist_agent", make_contextual_therapist_agent_node(runtime_context))
     graph.add_node("therapist_tools", ToolNode(therapist_tools))
-    graph.add_node("booking_agent", make_booking_agent_node(booking_tools))
+    graph.add_node("booking_agent", make_contextual_booking_agent_node(runtime_context))
     graph.add_node("booking_tools", ToolNode(booking_tools))
     graph.add_node("finalize", finalize_node)
     graph.add_edge(START, "safety")
