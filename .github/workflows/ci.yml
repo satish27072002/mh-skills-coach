@@ -16,6 +16,7 @@ jobs:
         working-directory: services/backend
     env:
       DATABASE_URL: sqlite+pysqlite:///./test.db
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -58,6 +59,7 @@ jobs:
         working-directory: services/backend
     env:
       DATABASE_URL: sqlite+pysqlite:///./test.db
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -111,6 +113,7 @@ jobs:
         working-directory: services/backend
     env:
       DATABASE_URL: sqlite+pysqlite:///./test.db
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
