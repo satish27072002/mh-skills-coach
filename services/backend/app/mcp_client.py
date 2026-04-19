@@ -16,7 +16,6 @@ class MCPClientError(RuntimeError):
 
 
 _mcp_client: Any | None = None
-_mcp_tools: list[Any] | None = None
 
 
 def _import_mcp_adapters() -> tuple[type[Any], Any]:
@@ -62,26 +61,23 @@ def _get_client() -> Any:
     return _mcp_client
 
 
-async def _load_tools() -> list[Any]:
-    global _mcp_tools
-    if _mcp_tools is None:
-        client = _get_client()
-        _, load_mcp_tools = _import_mcp_adapters()
-        async with client.session("mh") as session:
-            _mcp_tools = await load_mcp_tools(session)
-    return _mcp_tools
-
-
-async def get_mcp_tools() -> list[Any]:
-    return list(await _load_tools())
-
-
 def _run_async(coro: Any) -> Any:
     return asyncio.run(coro)
 
 
-async def _get_tool_by_suffix(suffix: str) -> Any:
-    tools = await _load_tools()
+async def _get_tools_for_session(session: Any) -> list[Any]:
+    _, load_mcp_tools = _import_mcp_adapters()
+    return await load_mcp_tools(session)
+
+
+async def get_mcp_tools() -> list[Any]:
+    client = _get_client()
+    async with client.session("mh") as session:
+        return list(await _get_tools_for_session(session))
+
+
+async def _get_tool_by_suffix(session: Any, suffix: str) -> Any:
+    tools = await _get_tools_for_session(session)
     for tool in tools:
         if tool.name.endswith(suffix):
             return tool
@@ -89,8 +85,10 @@ async def _get_tool_by_suffix(suffix: str) -> Any:
 
 
 async def ainvoke_mcp_tool(tool_suffix: str, payload: dict[str, Any]) -> Any:
-    tool = await _get_tool_by_suffix(tool_suffix)
-    return await tool.ainvoke(payload)
+    client = _get_client()
+    async with client.session("mh") as session:
+        tool = await _get_tool_by_suffix(session, tool_suffix)
+        return await tool.ainvoke(payload)
 
 
 async def amcp_therapist_search(
@@ -177,4 +175,3 @@ def mcp_send_email(
     reply_to: str | None = None,
 ) -> dict[str, Any]:
     return _run_async(amcp_send_email(to=to, subject=subject, body=body, reply_to=reply_to))
-
