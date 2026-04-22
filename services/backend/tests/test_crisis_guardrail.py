@@ -124,7 +124,7 @@ def test_crisis_with_location_triggers_therapist_search(monkeypatch, crisis_db):
         )
 
     monkeypatch.setattr(
-        "app.agents.therapist_agent.TherapistSearchAgent.search_with_retries",
+        "app.agents.therapist_agent.TherapistSearchHandler.search_with_retries",
         stub_search_with_retries,
     )
     client = TestClient(app)
@@ -162,7 +162,7 @@ def test_crisis_response_reuses_last_session_location(monkeypatch, crisis_db):
         return ([], None)
 
     monkeypatch.setattr(
-        "app.agents.therapist_agent.TherapistSearchAgent.search_with_retries",
+        "app.agents.therapist_agent.TherapistSearchHandler.search_with_retries",
         stub_search_with_retries,
     )
     client = TestClient(app)

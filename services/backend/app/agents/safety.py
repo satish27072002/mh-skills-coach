@@ -7,13 +7,13 @@ from app.prompts import SAFETY_GATE_MASTER_PROMPT
 from app.safety import is_crisis
 from app.schemas import ChatResponse
 
-from .therapist_agent import TherapistSearchAgent
+from .therapist_agent import TherapistSearchHandler
 
 SYSTEM_PROMPT = SAFETY_GATE_MASTER_PROMPT
 
 
 class SafetyGate:
-    def __init__(self, *, therapist_agent: TherapistSearchAgent):
+    def __init__(self, *, therapist_agent: TherapistSearchHandler):
         self._therapist_agent = therapist_agent
 
     def handle(self, *, user: User | None, request: Request, message: str) -> ChatResponse | None:

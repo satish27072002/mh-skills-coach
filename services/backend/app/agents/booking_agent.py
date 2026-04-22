@@ -141,7 +141,7 @@ def _missing_booking_fields_message(
     return "Please provide the requested appointment date/time in Europe/Stockholm."
 
 
-class BookingEmailAgent:
+class BookingEmailHandler:
     def __init__(self, *, send_email_fn: Callable[[str, EmailSendPayload], dict[str, Any]]):
         self._send_email_fn = send_email_fn
 

@@ -1,12 +1,20 @@
+from pathlib import Path
 from typing import Literal
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+_parents = Path(__file__).resolve().parents
+REPO_ROOT = _parents[3] if len(_parents) > 3 else _parents[-1]
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=(str(REPO_ROOT / ".env"), ".env"),
+        extra="ignore",
+    )
 
     database_url: str = "postgresql+psycopg://postgres:postgres@postgres:5432/mh"
-    mcp_base_url: str = "http://mcp:7000/mcp"
+    mcp_base_url: str = "http://mcp:7000/mcp/"
     frontend_url: str = "http://localhost:3000"
     nominatim_base_url: str = "https://nominatim.openstreetmap.org"
     overpass_base_url: str = "https://overpass-api.de"

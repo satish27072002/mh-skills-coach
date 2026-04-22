@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Annotated, Any, Callable, Literal, TypedDict
 
 from fastapi import HTTPException
@@ -12,7 +11,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .booking import (
@@ -27,6 +26,14 @@ from .booking import (
 from .db import pgvector_ready, retrieve_similar_chunks
 from .email_orchestrator import EmailSendPayload
 from .config import settings
+from .agents.therapist_agent import (
+    TherapistSearchHandler,
+    extract_location,
+    extract_radius_km,
+    extract_specialty,
+    get_remembered_location,
+    remember_location,
+)
 from .llm.langchain_model import get_langchain_chat_model
 from .llm.provider import ProviderError, ProviderNotConfiguredError, generate_chat
 from .mcp_client import ainvoke_mcp_tool, mcp_therapist_search
@@ -35,17 +42,30 @@ from .prompts import (
     BOOKING_EMAIL_MASTER_PROMPT,
     COACH_MASTER_PROMPT,
     SAFETY_GATE_MASTER_PROMPT,
-    THERAPIST_SEARCH_MASTER_PROMPT,
 )
-from .safety import is_crisis
+from .safety import contains_jailbreak_attempt, is_crisis, is_prescription_request, scope_check
 from .schemas import ChatResponse, PremiumCta, Resource, TherapistResult
 
 
 class AgentState(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
     route: Literal["COACH", "THERAPIST_SEARCH", "BOOKING_EMAIL", "FINAL"]
+    active_node: str
+    sentiment_analysis: dict[str, Any]
     retrieved_chunks: list[dict[str, Any]]
     response_json: dict[str, Any]
+
+
+class SentimentAgentState(TypedDict, total=False):
+    messages: Annotated[list[AnyMessage], add_messages]
+    sentiment_analysis: dict[str, Any]
+    active_node: str
+
+
+class CoachAgentState(TypedDict, total=False):
+    messages: Annotated[list[AnyMessage], add_messages]
+    sentiment_analysis: dict[str, Any]
+    active_node: str
 
 
 @dataclass
@@ -63,15 +83,44 @@ class GraphRuntimeContext:
     therapist_search_message: str | None = None
 
 
+class SafetyResourceDecision(BaseModel):
+    title: str
+    url: str
+
+
 class SafetyDecision(BaseModel):
     action: Literal["continue", "stop"]
     risk_level: Literal["normal", "crisis", "jailbreak", "medical", "out_of_scope"]
-    coach_message: str = ""
-    resources: list[dict[str, str]] = Field(default_factory=list)
+    coach_message: str
+    resources: list[SafetyResourceDecision]
 
 
 class RouteDecision(BaseModel):
     route: Literal["COACH", "THERAPIST_SEARCH", "BOOKING_EMAIL"]
+
+
+class SentimentAnalysis(BaseModel):
+    primary_sentiment: Literal[
+        "calm",
+        "anxious",
+        "stressed",
+        "sad",
+        "overwhelmed",
+        "angry",
+        "uncertain",
+        "hopeful",
+        "mixed",
+    ]
+    emotional_intensity: Literal["low", "medium", "high"]
+    support_style: Literal[
+        "warm_and_grounding",
+        "calm_and_reassuring",
+        "gentle_and_validating",
+        "steady_and_structured",
+        "encouraging_and_forward_looking",
+    ]
+    user_needs: list[str]
+    coach_handoff: str
 
 
 def _history_to_messages(history: list[dict[str, str]] | None, message: str) -> list[AnyMessage]:
@@ -196,6 +245,8 @@ def _build_tools(context: GraphRuntimeContext) -> tuple[list[BaseTool], list[Bas
             context.therapist_search_results = []
             context.therapist_search_message = "Therapist search failed. Please try again."
             return [{"status": "error", "message": context.therapist_search_message}]
+        if isinstance(results, dict):
+            results = [results]
         if not isinstance(results, list):
             context.therapist_search_status = "error"
             context.therapist_search_results = []
@@ -403,6 +454,96 @@ def _legacy_build_graph(
 def make_safety_node(context: GraphRuntimeContext):
     def safety_node(state: AgentState) -> AgentState:
         message = _latest_user_message(state)
+        request = context.request
+
+        if is_prescription_request(message):
+            return {
+                "route": "FINAL",
+                "response_json": ChatResponse(
+                    coach_message=(
+                        "This is beyond my capability. I can't help with prescriptions, dosing, or medication changes. "
+                        "Please contact a licensed clinician or pharmacist. If you think you may be in danger "
+                        "(e.g., overdose, severe reaction), call 112 immediately in Sweden."
+                    ),
+                    resources=[
+                        Resource(title="Emergency services (Sweden)", url="https://www.112.se/"),
+                        Resource(title="Healthcare advice (Sweden)", url="https://www.1177.se/"),
+                    ],
+                    risk_level="medical",
+                ).model_dump(),
+            }
+
+        if is_crisis(message):
+            location = None
+            radius_km = 25
+            specialty = extract_specialty(message)
+            therapists: list[TherapistResult] | None = None
+
+            if request is not None:
+                location = extract_location(message) or get_remembered_location(
+                    user=context.user,
+                    request=request,
+                    session_cookie_name=settings.session_cookie_name,
+                )
+                radius_km = extract_radius_km(message) or 25
+
+            if location:
+                therapist_agent = TherapistSearchHandler(
+                    search_fn=context.therapist_search_fn or mcp_therapist_search,
+                    dev_mode=True,
+                    session_cookie_name=settings.session_cookie_name,
+                )
+                results, _ = therapist_agent.search_with_retries(
+                    location_text=location,
+                    radius_km=radius_km,
+                    specialty=specialty,
+                )
+                therapists = [TherapistResult.model_validate(item) for item in results]
+                if request is not None:
+                    remember_location(
+                        user=context.user,
+                        request=request,
+                        location=location,
+                        session_cookie_name=settings.session_cookie_name,
+                    )
+
+            coach_message = (
+                "I am really glad you reached out. Please seek immediate support right now. "
+                "If you might act on these thoughts or are in immediate danger, call 112 immediately. "
+                "You can also contact Mind Självmordslinjen at 90101 (chat/phone) for urgent emotional support, "
+                "and use 1177 Vårdguiden for healthcare guidance and where to get care."
+            )
+            if not therapists:
+                coach_message += " Please share a city or postcode so I can look for nearby in-person support options."
+
+            return {
+                "route": "FINAL",
+                "response_json": ChatResponse(
+                    coach_message=coach_message,
+                    resources=[
+                        Resource(title="Emergency services (Sweden) - 112", url="https://www.112.se/"),
+                        Resource(title="Mind Självmordslinjen - 90101", url="https://mind.se/hitta-hjalp/sjalvmordslinjen/"),
+                        Resource(title="1177 Vårdguiden", url="https://www.1177.se/"),
+                    ],
+                    therapists=therapists,
+                    risk_level="crisis",
+                    premium_cta=None,
+                ).model_dump(),
+            }
+
+        if contains_jailbreak_attempt(message) or not scope_check(message):
+            return {
+                "route": "FINAL",
+                "response_json": ChatResponse(
+                    coach_message=(
+                        "I'm here to help with mental health coping skills, finding therapists, or booking appointments. "
+                        "I'm not able to help with that — is there something in those areas I can support you with?"
+                    ),
+                    resources=[],
+                    risk_level="out_of_scope",
+                ).model_dump(),
+            }
+
         history_lines = [
             f"- {'assistant' if isinstance(item, AIMessage) else 'user'}: {str(item.content)}"
             for item in state["messages"][:-1][-6:]
@@ -413,6 +554,8 @@ def make_safety_node(context: GraphRuntimeContext):
             "Use action=stop for crisis, jailbreak, out-of-scope, or prescription/medical advice requests.\n"
             "Use action=continue only when the request should proceed to the supervisor.\n"
             "Ordinary emotions like anxiety, stress, sadness, overwhelm, nervousness, and panic without self-harm intent should continue to the supervisor with risk_level=normal.\n"
+            "Requests about finding therapists, therapist recommendations, booking appointments, sending booking emails, contacting therapists, or premium therapist access are in scope and should continue.\n"
+            "Examples that should continue: 'please find me a therapist in karlskrona', 'can you find me a therapist?', 'send me an email?', 'book an appointment', 'contact a therapist for me'.\n"
             "Use risk_level=crisis only for self-harm, suicide, immediate danger, or clear inability to stay safe.\n"
             "Use risk_level=medical for prescriptions, medication changes, dosing, or clinical treatment advice.\n"
             "When stopping, produce the full user-facing safety response yourself.\n"
@@ -425,7 +568,7 @@ def make_safety_node(context: GraphRuntimeContext):
                 "route": "FINAL",
                 "response_json": ChatResponse(
                     coach_message=decision.coach_message,
-                    resources=[Resource(**item) for item in decision.resources],
+                    resources=[Resource(**item.model_dump()) for item in decision.resources],
                     risk_level=decision.risk_level,
                 ).model_dump(),
             }
@@ -462,6 +605,8 @@ def make_supervisor_node(context: GraphRuntimeContext):
             "- BOOKING_EMAIL: appointment email drafting, email drafting/sending, booking confirmations, YES/NO confirmation replies, pending booking follow-ups, missing therapist email/time follow-ups.\n"
             "- THERAPIST_SEARCH: finding providers, therapist recommendations, location follow-ups after being asked for city/postcode, provider search refinement.\n"
             "- COACH: supportive coping conversation, emotional support, grounding, breathing, journaling, general mental wellbeing guidance.\n"
+            "- Requests that mention therapist, counsellor, psychologist, psychiatrist, clinic, provider, or a city/location for therapist search should normally route to THERAPIST_SEARCH.\n"
+            "- Requests that mention email, appointment, booking, schedule, contact therapist, send a message, reach out, or help me email should normally route to BOOKING_EMAIL.\n"
             "- If there is pending booking state, route short follow-up replies like yes/no, times, or therapist emails to BOOKING_EMAIL.\n"
             "- If there is pending therapist-location state, route short city/postcode replies to THERAPIST_SEARCH.\n"
             "- Do not choose COACH when the user is clearly continuing a booking or therapist-search workflow.\n\n"
@@ -479,55 +624,148 @@ def make_supervisor_node(context: GraphRuntimeContext):
 def _route_after_supervisor(state: AgentState) -> str:
     route = state.get("route")
     if route == "THERAPIST_SEARCH":
-        return "therapist_agent"
+        return "therapist"
     if route == "BOOKING_EMAIL":
-        return "booking_agent"
-    return "coach_agent"
+        return "booking"
+    return "sentiment_agent"
 
 
-def make_coach_agent_node(tools: list[BaseTool]):
-    def coach_agent(state: AgentState) -> AgentState:
+def build_sentiment_subgraph():
+    """Return a compiled LangGraph subgraph for sentiment analysis.
+
+    The subgraph reads ``messages`` from the parent AgentState, makes a single
+    structured LLM call, and writes ``sentiment_analysis`` + ``active_node``
+    back into the parent state via key-name merging.
+    """
+
+    def analyze_node(state: SentimentAgentState) -> SentimentAgentState:
+        # _latest_user_message / _latest_ai_message accept any TypedDict with
+        # a "messages" key — cast is safe here.
+        message = _latest_user_message(state)  # type: ignore[arg-type]
+        history_lines = [
+            f"- {'assistant' if isinstance(item, AIMessage) else 'user'}: {str(item.content)}"
+            for item in state["messages"][:-1][-6:]
+        ]
+        prompt = (
+            "You are the sentiment analysis specialist inside a larger LangGraph mental health system. "
+            "Your job is to analyze the user's emotional tone and produce guidance for the coach agent. "
+            "Return only JSON matching the required schema.\n\n"
+            "Focus on emotional tone, emotional intensity, and what communication style would help most. "
+            "You are not the final user-facing coach and should not answer the user directly.\n"
+            "Choose one primary_sentiment from: calm, anxious, stressed, sad, overwhelmed, angry, uncertain, hopeful, mixed.\n"
+            "Choose one emotional_intensity from: low, medium, high.\n"
+            "Choose one support_style from: warm_and_grounding, calm_and_reassuring, gentle_and_validating, steady_and_structured, encouraging_and_forward_looking.\n"
+            "Populate user_needs with short phrases like validation, grounding, reassurance, structure, practical_steps, reflection, hope.\n"
+            "Populate coach_handoff with 1-2 sentences telling the coach HOW to respond, not WHAT final answer to give.\n"
+            f"Recent conversation:\n{chr(10).join(history_lines) if history_lines else '- none'}\n"
+            f"Latest user message: {message}"
+        )
+        decision = _structured_decision(prompt, message, SentimentAnalysis)
+        return {
+            "active_node": "sentiment_agent",
+            "sentiment_analysis": decision.model_dump(),
+        }
+
+    g: StateGraph = StateGraph(SentimentAgentState)
+    g.add_node("analyze", analyze_node)
+    g.add_edge(START, "analyze")
+    g.add_edge("analyze", END)
+    return g.compile()
+
+
+def build_coach_subgraph(tools: list[BaseTool]):
+    """Return a compiled LangGraph subgraph for coaching.
+
+    The subgraph reads ``messages`` and ``sentiment_analysis`` from the parent
+    AgentState (populated by the sentiment subgraph), runs the coach LLM call,
+    and loops through tool calls internally before writing the final AI message
+    back to the parent state.
+    """
+
+    def coach_node(state: CoachAgentState) -> CoachAgentState:
+        sentiment = state.get("sentiment_analysis") or {}
+        handoff = sentiment.get("coach_handoff", "No sentiment handoff available.")
+        support_style = sentiment.get("support_style", "gentle_and_validating")
+        primary_sentiment = sentiment.get("primary_sentiment", "mixed")
+        emotional_intensity = sentiment.get("emotional_intensity", "medium")
+        user_needs = sentiment.get("user_needs", [])
         response = _graph_model_response(
             (
                 f"{COACH_MASTER_PROMPT}\n"
                 "You are the coach specialist inside a larger LangGraph system. "
+                "Another specialist agent has already analyzed the user's sentiment; you must use that handoff to shape your tone and pacing. "
+                f"Sentiment agent handoff: primary_sentiment={primary_sentiment}; emotional_intensity={emotional_intensity}; support_style={support_style}; user_needs={', '.join(user_needs) if user_needs else 'none'}; guidance={handoff}. "
                 "Use tools when retrieved context would help. "
                 "When you are finished, respond naturally as the coaching specialist; final app formatting happens later."
             ),
-            state,
+            state,  # type: ignore[arg-type]
             tools=tools,
         )
-        return {"messages": [response]}
+        return {"active_node": "coach_agent", "messages": [response]}
 
-    return coach_agent
+    def _coach_route(state: CoachAgentState) -> str:
+        msg = _latest_ai_message(state)  # type: ignore[arg-type]
+        if msg and msg.tool_calls:
+            return "tools"
+        return END
+
+    g: StateGraph = StateGraph(CoachAgentState)
+    g.add_node("coach", coach_node)
+    g.add_node("tools", ToolNode(tools))
+    g.add_edge(START, "coach")
+    g.add_conditional_edges("coach", _coach_route)
+    g.add_edge("tools", "coach")
+    return g.compile()
 
 
-def make_therapist_agent_node(tools: list[BaseTool], context: GraphRuntimeContext):
-    def therapist_agent(state: AgentState) -> AgentState:
-        premium_state = "premium" if (context.user and context.user.is_premium) or settings.dev_mode else "not_premium"
-        auth_state = "signed_in" if context.user else "anonymous"
-        prompt = (
-            f"{THERAPIST_SEARCH_MASTER_PROMPT}\n"
-            "You are the therapist search specialist inside a larger LangGraph system.\n"
-            "You must reason as the therapist search agent, not as a general coach.\n"
-            f"Auth state: {auth_state}. Access state: {premium_state}.\n"
-            "If the user is asking to find therapists and a location is present, you must call the therapist_search tool before answering.\n"
-            "Use the therapist_search tool when you have enough search information.\n"
-            "If location is missing, ask only for city or postcode.\n"
-            "If the tool reports sign-in or premium access errors, clearly explain that sign-in or premium access is required.\n"
-            "If results exist, clearly summarize them for the user.\n"
-            "Never invent therapist names, addresses, phones, emails, or URLs.\n"
-            "If no concrete therapist rows are returned by the tool, do not mention any concrete therapists.\n"
-            "Respond as the therapist search specialist; final app formatting happens later."
+def make_therapist_node(tools: list[BaseTool], context: GraphRuntimeContext):
+    def therapist_node(state: AgentState) -> AgentState:
+        if not context.request:
+            return {
+                "active_node": "therapist",
+                "response_json": ChatResponse(
+                    coach_message="Therapist search is unavailable right now.",
+                    therapists=[],
+                ).model_dump(),
+            }
+
+        therapist_handler = TherapistSearchHandler(
+            search_fn=context.therapist_search_fn or mcp_therapist_search,
+            dev_mode=settings.dev_mode,
+            session_cookie_name=settings.session_cookie_name,
         )
-        response = _graph_model_response(prompt, state, tools=tools)
-        return {"messages": [response]}
+        response = therapist_handler.handle(
+            user=context.user,
+            request=context.request,
+            message=_latest_user_message(state),
+        )
 
-    return therapist_agent
+        context.therapist_search_results = [
+            item.model_dump() if isinstance(item, TherapistResult) else item
+            for item in (response.therapists or [])
+        ]
+        if response.therapists:
+            context.therapist_search_status = "ok"
+        elif response.premium_cta and "sign in" in (response.coach_message or "").lower():
+            context.therapist_search_status = "auth_required"
+        elif response.premium_cta and "premium" in (response.coach_message or "").lower():
+            context.therapist_search_status = "premium_required"
+        elif response.coach_message and response.coach_message.startswith("Please share a city or postcode"):
+            context.therapist_search_status = "needs_location"
+        else:
+            context.therapist_search_status = "no_results"
+        context.therapist_search_message = response.coach_message
+
+        return {
+            "active_node": "therapist",
+            "response_json": response.model_dump(),
+        }
+
+    return therapist_node
 
 
-def make_booking_agent_node(tools: list[BaseTool], context: GraphRuntimeContext):
-    def booking_agent(state: AgentState) -> AgentState:
+def make_booking_node(tools: list[BaseTool], context: GraphRuntimeContext):
+    def booking_node(state: AgentState) -> AgentState:
         pending_state = "pending_exists" if context.pending_action or context.pending_expired else "no_pending"
         prompt = (
             f"{BOOKING_EMAIL_MASTER_PROMPT}\n"
@@ -543,9 +781,9 @@ def make_booking_agent_node(tools: list[BaseTool], context: GraphRuntimeContext)
             "Respond as the booking specialist; final app formatting happens later."
         )
         response = _graph_model_response(prompt, state, tools=tools)
-        return {"messages": [response]}
+        return {"active_node": "booking", "messages": [response]}
 
-    return booking_agent
+    return booking_node
 
 
 def _tool_route_for(node_name: str, tool_node_name: str):
@@ -579,7 +817,15 @@ def make_finalize_node(context: GraphRuntimeContext):
             status = context.therapist_search_status
             grounded = ChatResponse.model_validate(payload)
             if status == "ok":
-                grounded.therapists = [TherapistResult.model_validate(item) for item in context.therapist_search_results]
+                grounded.therapists = [
+                    TherapistResult.model_validate(
+                        {
+                            **item,
+                            "url": item.get("url") or item.get("source_url") or "https://www.openstreetmap.org",
+                        }
+                    )
+                    for item in context.therapist_search_results
+                ]
                 grounded.premium_cta = None
             else:
                 grounded.therapists = None
@@ -612,22 +858,26 @@ def build_graph(
     graph = StateGraph(AgentState)
     graph.add_node("safety", make_safety_node(runtime_context))
     graph.add_node("supervisor", make_supervisor_node(runtime_context))
-    graph.add_node("coach_agent", make_coach_agent_node(coach_tools))
-    graph.add_node("coach_tools", ToolNode(coach_tools))
-    graph.add_node("therapist_agent", make_therapist_agent_node(therapist_tools, runtime_context))
+    # True subgraphs — each has its own compiled StateGraph with START/END cycle
+    graph.add_node("sentiment_agent", build_sentiment_subgraph())
+    graph.add_node("coach_agent", build_coach_subgraph(coach_tools))
+    # Plain handler nodes (not agents — no reasoning loop of their own)
+    graph.add_node("therapist", make_therapist_node(therapist_tools, runtime_context))
     graph.add_node("therapist_tools", ToolNode(therapist_tools))
-    graph.add_node("booking_agent", make_booking_agent_node(booking_tools, runtime_context))
+    graph.add_node("booking", make_booking_node(booking_tools, runtime_context))
     graph.add_node("booking_tools", ToolNode(booking_tools))
     graph.add_node("finalize", make_finalize_node(runtime_context))
     graph.add_edge(START, "safety")
     graph.add_conditional_edges("safety", _route_after_safety)
     graph.add_conditional_edges("supervisor", _route_after_supervisor)
-    graph.add_conditional_edges("coach_agent", _tool_route_for("coach_agent", "coach_tools"))
-    graph.add_edge("coach_tools", "coach_agent")
-    graph.add_conditional_edges("therapist_agent", _tool_route_for("therapist_agent", "therapist_tools"))
-    graph.add_edge("therapist_tools", "therapist_agent")
-    graph.add_conditional_edges("booking_agent", _tool_route_for("booking_agent", "booking_tools"))
-    graph.add_edge("booking_tools", "booking_agent")
+    # Sentiment subgraph output flows directly into coach subgraph; tool loop
+    # is encapsulated inside coach_agent — no coach_tools node in parent.
+    graph.add_edge("sentiment_agent", "coach_agent")
+    graph.add_edge("coach_agent", "finalize")
+    graph.add_conditional_edges("therapist", _tool_route_for("therapist", "therapist_tools"))
+    graph.add_edge("therapist_tools", "therapist")
+    graph.add_conditional_edges("booking", _tool_route_for("booking", "booking_tools"))
+    graph.add_edge("booking_tools", "booking")
     graph.add_edge("finalize", END)
     return graph.compile()
 

@@ -65,7 +65,7 @@ def test_chat_find_therapist_routes_to_search_not_booking(monkeypatch, therapist
         )
 
     monkeypatch.setattr(
-        "app.agents.therapist_agent.TherapistSearchAgent.search_with_retries",
+        "app.agents.therapist_agent.TherapistSearchHandler.search_with_retries",
         stub_search_with_retries,
     )
     client = TestClient(app)
@@ -92,7 +92,7 @@ def test_chat_therapist_search_works_for_free_user_in_dev_mode(monkeypatch, ther
         session.refresh(user)
 
     monkeypatch.setattr(
-        "app.agents.therapist_agent.TherapistSearchAgent.search_with_retries",
+        "app.agents.therapist_agent.TherapistSearchHandler.search_with_retries",
         lambda self, **kwargs: (
             [
                 {
@@ -163,11 +163,63 @@ def test_chat_therapist_search_omits_specialty_when_not_provided(monkeypatch, th
     assert "specialty" not in outbound
 
 
+def test_chat_therapist_search_handles_any_city_not_just_stockholm(monkeypatch, therapist_chat_db):
+    with db.SessionLocal() as session:
+        user = User(email="premium-malmo@example.com", name="Premium Malmo", is_premium=True)
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+
+    captured: dict[str, object] = {}
+
+    def capture_search(
+        self,
+        *,
+        location_text: str,
+        radius_km: int | None,
+        specialty: str | None,
+        limit: int | None = None,
+    ):
+        captured["location"] = location_text
+        captured["radius_km"] = radius_km
+        captured["specialty"] = specialty
+        captured["limit"] = limit
+        return (
+            [
+                {
+                    "name": "Malmo Therapy",
+                    "address": "8 Main St, Malmö",
+                    "url": "https://example.com/malmo-therapy",
+                    "phone": "+46 40 111 111",
+                    "distance_km": 2.7,
+                }
+            ],
+            None,
+        )
+
+    monkeypatch.setattr(
+        "app.agents.therapist_agent.TherapistSearchHandler.search_with_retries",
+        capture_search,
+    )
+    client = TestClient(app)
+    client.cookies.set(settings.session_cookie_name, str(user.id))
+
+    response = client.post("/chat", json={"message": "Can you find me a therapist in Malmö within 10 km?"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("therapists")
+    assert payload["therapists"][0]["name"] == "Malmo Therapy"
+    assert captured["location"] == "Malmö"
+    assert captured["radius_km"] == 10
+    assert captured["limit"] == 10
+
+
 def test_chat_multiturn_asks_location_then_uses_city_reply(monkeypatch, therapist_chat_db):
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
-        "app.agents.therapist_agent.TherapistSearchAgent.search_with_retries",
+        "app.agents.therapist_agent.TherapistSearchHandler.search_with_retries",
         lambda self, **kwargs: (
             [
                 {
@@ -207,7 +259,7 @@ def test_chat_multiturn_asks_location_then_uses_city_reply(monkeypatch, therapis
             )
 
         monkeypatch.setattr(
-            "app.agents.therapist_agent.TherapistSearchAgent.search_with_retries",
+            "app.agents.therapist_agent.TherapistSearchHandler.search_with_retries",
             capture_search,
         )
         second = client.post("/chat", json={"message": "stockholm"})
@@ -223,7 +275,7 @@ def test_chat_multiturn_asks_location_then_uses_city_reply(monkeypatch, therapis
 
 def test_chat_therapist_search_dev_mode_bypass_without_auth(monkeypatch, therapist_chat_db):
     monkeypatch.setattr(
-        "app.agents.therapist_agent.TherapistSearchAgent.search_with_retries",
+        "app.agents.therapist_agent.TherapistSearchHandler.search_with_retries",
         lambda self, **kwargs: (
             [
                 {
@@ -291,7 +343,7 @@ def test_successful_search_then_missing_location_does_not_reuse_previous_city(mo
         )
 
     monkeypatch.setattr(
-        "app.agents.therapist_agent.TherapistSearchAgent.search_with_retries",
+        "app.agents.therapist_agent.TherapistSearchHandler.search_with_retries",
         capture_search,
     )
     client = TestClient(app)

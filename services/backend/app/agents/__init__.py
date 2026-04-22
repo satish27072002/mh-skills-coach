@@ -1,13 +1,13 @@
-from .booking_agent import BookingEmailAgent
+from .booking_agent import BookingEmailHandler
 from .router import ChatRoute, ChatRouter, RouterInput
 from .safety import SafetyGate
-from .therapist_agent import TherapistSearchAgent
+from .therapist_agent import TherapistSearchHandler
 
 __all__ = [
-    "BookingEmailAgent",
+    "BookingEmailHandler",
     "ChatRoute",
     "ChatRouter",
     "RouterInput",
     "SafetyGate",
-    "TherapistSearchAgent",
+    "TherapistSearchHandler",
 ]

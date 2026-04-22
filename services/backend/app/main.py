@@ -25,7 +25,7 @@ from google.oauth2 import id_token as google_id_token
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .agents import BookingEmailAgent, ChatRouter, RouterInput, SafetyGate, TherapistSearchAgent
+from .agents import BookingEmailHandler, ChatRouter, RouterInput, SafetyGate, TherapistSearchHandler
 from .agents.therapist_agent import LAST_THERAPIST_LOCATION_BY_SESSION
 from .config import settings
 from .agent_graph import GraphRuntimeContext, run_agent
@@ -631,16 +631,16 @@ def _build_router() -> ChatRouter:
     return ChatRouter()
 
 
-def _build_therapist_agent() -> TherapistSearchAgent:
-    return TherapistSearchAgent(
+def _build_therapist_handler() -> TherapistSearchHandler:
+    return TherapistSearchHandler(
         search_fn=_run_therapist_search,
         dev_mode=settings.dev_mode,
         session_cookie_name=settings.session_cookie_name,
     )
 
 
-def _build_booking_agent() -> BookingEmailAgent:
-    return BookingEmailAgent(send_email_fn=send_email_for_user)
+def _build_booking_handler() -> BookingEmailHandler:
+    return BookingEmailHandler(send_email_fn=send_email_for_user)
 
 
 def _code_challenge(code_verifier: str) -> str:
@@ -919,7 +919,7 @@ def therapists_search(
     db: Session = Depends(get_db)
 ) -> TherapistSearchResponse:
     user = _get_user_from_cookie(db, request)
-    therapist_agent = _build_therapist_agent()
+    therapist_agent = _build_therapist_handler()
     if not user and not therapist_agent.dev_mode:
         raise HTTPException(status_code=401, detail="not authenticated")
     if user and not user.is_premium and not therapist_agent.dev_mode:
@@ -1067,10 +1067,18 @@ def get_checkout_session(
     user_id = metadata.get("user_id") or session.get("client_reference_id")
     if user_id and str(user.id) != str(user_id):
         raise HTTPException(status_code=403, detail="forbidden")
+    payment_status = session.get("payment_status")
+    if payment_status == "paid" and not user.is_premium:
+        user.is_premium = True
+        stripe_customer_id = session.get("customer")
+        if isinstance(stripe_customer_id, str) and stripe_customer_id.strip():
+            user.stripe_customer_id = stripe_customer_id.strip()
+        db.commit()
+        db.refresh(user)
     return {
         "id": session.get("id"),
         "status": session.get("status"),
-        "payment_status": session.get("payment_status")
+        "payment_status": payment_status
     }
 
 @app.post("/payments/webhook")

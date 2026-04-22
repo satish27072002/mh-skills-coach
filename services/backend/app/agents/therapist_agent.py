@@ -177,7 +177,7 @@ class TherapistSearchParams:
     limit: int
 
 
-class TherapistSearchAgent:
+class TherapistSearchHandler:
     def __init__(
         self,
         *,
