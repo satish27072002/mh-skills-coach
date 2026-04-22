@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Annotated, Any, Callable, Literal, TypedDict
 
 from fastapi import HTTPException
@@ -44,7 +44,20 @@ from .prompts import (
     SAFETY_GATE_MASTER_PROMPT,
 )
 from .safety import contains_jailbreak_attempt, is_crisis, is_prescription_request, scope_check
-from .schemas import ChatResponse, PremiumCta, Resource, TherapistResult
+from .schemas import ChatResponse, Resource, TherapistResult
+
+
+class TherapistSearch(TypedDict, total=False):
+    """Typed output contract written by the therapist node into graph state."""
+    status: str  # "ok" | "auth_required" | "premium_required" | "needs_location" | "no_results" | "error" | "unavailable"
+    results: list[dict[str, Any]]
+    message: str | None
+
+
+class BookingAgentState(TypedDict, total=False):
+    """State for the booking subgraph — shares messages/active_node with parent."""
+    messages: Annotated[list[AnyMessage], add_messages]
+    active_node: str
 
 
 class AgentState(TypedDict, total=False):
@@ -52,6 +65,7 @@ class AgentState(TypedDict, total=False):
     route: Literal["COACH", "THERAPIST_SEARCH", "BOOKING_EMAIL", "FINAL"]
     active_node: str
     sentiment_analysis: dict[str, Any]
+    therapist_search: TherapistSearch
     retrieved_chunks: list[dict[str, Any]]
     response_json: dict[str, Any]
 
@@ -78,9 +92,6 @@ class GraphRuntimeContext:
     request: Any | None = None
     therapist_search_fn: Callable[[str, int | None, str | None, int], list[Any]] | None = None
     send_email_fn: Callable[[str, EmailSendPayload], dict[str, Any]] | None = None
-    therapist_search_status: str | None = None
-    therapist_search_results: list[dict[str, Any]] = field(default_factory=list)
-    therapist_search_message: str | None = None
 
 
 class SafetyResourceDecision(BaseModel):
@@ -203,7 +214,7 @@ def _structured_decision(prompt: str, message: str, model_cls: type[BaseModel]) 
     raise ProviderError("structured decision parsing failed")
 
 
-def _build_tools(context: GraphRuntimeContext) -> tuple[list[BaseTool], list[BaseTool], list[BaseTool]]:
+def _build_tools(context: GraphRuntimeContext) -> tuple[list[BaseTool], list[BaseTool]]:
     def retrieve_context_tool_impl(query: str) -> list[dict[str, Any]]:
         if not pgvector_ready():
             return []
@@ -213,54 +224,6 @@ def _build_tools(context: GraphRuntimeContext) -> tuple[list[BaseTool], list[Bas
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    async def therapist_search_tool_impl(
-        location_text: str,
-        radius_km: int = 25,
-        specialty: str | None = None,
-        limit: int = 5,
-    ) -> list[dict[str, Any]]:
-        user = context.user
-        if not user:
-            context.therapist_search_status = "auth_required"
-            context.therapist_search_results = []
-            context.therapist_search_message = "Please sign in to use therapist search."
-            return [{"status": "auth_required", "message": context.therapist_search_message}]
-        if not user.is_premium:
-            context.therapist_search_status = "premium_required"
-            context.therapist_search_results = []
-            context.therapist_search_message = "Therapist search is available with premium access."
-            return [{"status": "premium_required", "message": context.therapist_search_message}]
-        payload: dict[str, Any] = {
-            "location_text": location_text,
-            "radius_km": min(max(radius_km, 1), 50),
-            "limit": min(max(limit, 1), 10),
-        }
-        if specialty:
-            payload["specialty"] = specialty
-        try:
-            results = await ainvoke_mcp_tool("therapist_search_tool", payload)
-        except Exception:
-            context.therapist_search_status = "error"
-            context.therapist_search_results = []
-            context.therapist_search_message = "Therapist search failed. Please try again."
-            return [{"status": "error", "message": context.therapist_search_message}]
-        if isinstance(results, dict):
-            results = [results]
-        if not isinstance(results, list):
-            context.therapist_search_status = "error"
-            context.therapist_search_results = []
-            context.therapist_search_message = "Therapist search failed. Please try again."
-            return [{"status": "error", "message": context.therapist_search_message}]
-        normalized_results = [item for item in results if isinstance(item, dict)]
-        context.therapist_search_results = normalized_results
-        if normalized_results:
-            context.therapist_search_status = "ok"
-            context.therapist_search_message = None
-            return normalized_results
-        context.therapist_search_status = "no_results"
-        context.therapist_search_message = "I couldn't find therapists matching that search. Try a broader area or a different specialty."
-        return [{"status": "no_results", "message": context.therapist_search_message}]
 
     def load_pending_booking_tool_impl() -> dict[str, Any]:
         if not context.db or not context.actor_key:
@@ -353,11 +316,6 @@ def _build_tools(context: GraphRuntimeContext) -> tuple[list[BaseTool], list[Bas
         name="retrieve_context",
         description="Retrieve relevant mental health coaching context for the latest user message.",
     )
-    therapist_search_tool = StructuredTool.from_function(
-        coroutine=therapist_search_tool_impl,
-        name="therapist_search",
-        description="Search nearby therapists, psychologists, clinics, and counsellors.",
-    )
     load_pending_booking_tool = StructuredTool.from_function(
         func=load_pending_booking_tool_impl,
         name="load_pending_booking",
@@ -379,7 +337,7 @@ def _build_tools(context: GraphRuntimeContext) -> tuple[list[BaseTool], list[Bas
         description="Cancel and clear the current pending booking request.",
     )
 
-    return [retrieve_context_tool], [therapist_search_tool], [load_pending_booking_tool, prepare_booking_from_message_tool, send_pending_booking_email_tool, cancel_pending_booking_tool]
+    return [retrieve_context_tool], [load_pending_booking_tool, prepare_booking_from_message_tool, send_pending_booking_email_tool, cancel_pending_booking_tool]
 
 
 def _legacy_classify_risk(state: AgentState) -> AgentState:
@@ -626,7 +584,7 @@ def _route_after_supervisor(state: AgentState) -> str:
     if route == "THERAPIST_SEARCH":
         return "therapist"
     if route == "BOOKING_EMAIL":
-        return "booking"
+        return "booking_agent"
     return "sentiment_agent"
 
 
@@ -718,11 +676,12 @@ def build_coach_subgraph(tools: list[BaseTool]):
     return g.compile()
 
 
-def make_therapist_node(tools: list[BaseTool], context: GraphRuntimeContext):
+def make_therapist_node(context: GraphRuntimeContext):
     def therapist_node(state: AgentState) -> AgentState:
         if not context.request:
             return {
                 "active_node": "therapist",
+                "therapist_search": TherapistSearch(status="unavailable", results=[], message=None),
                 "response_json": ChatResponse(
                     coach_message="Therapist search is unavailable right now.",
                     therapists=[],
@@ -740,32 +699,40 @@ def make_therapist_node(tools: list[BaseTool], context: GraphRuntimeContext):
             message=_latest_user_message(state),
         )
 
-        context.therapist_search_results = [
+        results = [
             item.model_dump() if isinstance(item, TherapistResult) else item
             for item in (response.therapists or [])
         ]
         if response.therapists:
-            context.therapist_search_status = "ok"
+            status = "ok"
         elif response.premium_cta and "sign in" in (response.coach_message or "").lower():
-            context.therapist_search_status = "auth_required"
+            status = "auth_required"
         elif response.premium_cta and "premium" in (response.coach_message or "").lower():
-            context.therapist_search_status = "premium_required"
+            status = "premium_required"
         elif response.coach_message and response.coach_message.startswith("Please share a city or postcode"):
-            context.therapist_search_status = "needs_location"
+            status = "needs_location"
         else:
-            context.therapist_search_status = "no_results"
-        context.therapist_search_message = response.coach_message
+            status = "no_results"
 
         return {
             "active_node": "therapist",
+            "therapist_search": TherapistSearch(status=status, results=results, message=response.coach_message),
             "response_json": response.model_dump(),
         }
 
     return therapist_node
 
 
-def make_booking_node(tools: list[BaseTool], context: GraphRuntimeContext):
-    def booking_node(state: AgentState) -> AgentState:
+def build_booking_subgraph(tools: list[BaseTool], context: GraphRuntimeContext):
+    """Return a compiled LangGraph subgraph for booking email handling.
+
+    The subgraph reads ``messages`` from the parent AgentState, runs the
+    booking LLM call, loops through tool calls internally (load → parse →
+    confirm/cancel/send), and writes the final AI message back to the parent
+    state via key-name merging.
+    """
+
+    def booking_node(state: BookingAgentState) -> BookingAgentState:
         pending_state = "pending_exists" if context.pending_action or context.pending_expired else "no_pending"
         prompt = (
             f"{BOOKING_EMAIL_MASTER_PROMPT}\n"
@@ -780,28 +747,30 @@ def make_booking_node(tools: list[BaseTool], context: GraphRuntimeContext):
             "When information is missing, ask only for the missing fields.\n"
             "Respond as the booking specialist; final app formatting happens later."
         )
-        response = _graph_model_response(prompt, state, tools=tools)
-        return {"active_node": "booking", "messages": [response]}
+        response = _graph_model_response(prompt, state, tools=tools)  # type: ignore[arg-type]
+        return {"active_node": "booking_agent", "messages": [response]}
 
-    return booking_node
+    def _booking_route(state: BookingAgentState) -> str:
+        msg = _latest_ai_message(state)  # type: ignore[arg-type]
+        if msg and msg.tool_calls:
+            return "tools"
+        return END
+
+    g: StateGraph = StateGraph(BookingAgentState)
+    g.add_node("booking", booking_node)
+    g.add_node("tools", ToolNode(tools))
+    g.add_edge(START, "booking")
+    g.add_conditional_edges("booking", _booking_route)
+    g.add_edge("tools", "booking")
+    return g.compile()
 
 
-def _tool_route_for(node_name: str, tool_node_name: str):
-    def route(state: AgentState) -> str:
-        if state.get("response_json"):
-            return "finalize"
-        message = _latest_ai_message(state)
-        if message and message.tool_calls:
-            return tool_node_name
-        return "finalize"
-
-    return route
-
-
-def make_finalize_node(context: GraphRuntimeContext):
+def make_finalize_node(_context: GraphRuntimeContext):
     def finalize_node(state: AgentState) -> AgentState:
+        # Therapist and safety nodes set response_json directly; pass through.
         if state.get("response_json"):
             return {"response_json": state["response_json"]}
+        # Coach and booking nodes produce messages; use LLM to structure them.
         prompt = (
             "You are the final response formatter for a LangGraph mental health application.\n"
             "Return only a ChatResponse object using the full conversation and any tool outputs already present in the messages.\n"
@@ -813,34 +782,6 @@ def make_finalize_node(context: GraphRuntimeContext):
             "Do not invent fields; only populate what the conversation and tool outputs support."
         )
         payload = _structured_chat_response(prompt, state)
-        if state.get("route") == "THERAPIST_SEARCH":
-            status = context.therapist_search_status
-            grounded = ChatResponse.model_validate(payload)
-            if status == "ok":
-                grounded.therapists = [
-                    TherapistResult.model_validate(
-                        {
-                            **item,
-                            "url": item.get("url") or item.get("source_url") or "https://www.openstreetmap.org",
-                        }
-                    )
-                    for item in context.therapist_search_results
-                ]
-                grounded.premium_cta = None
-            else:
-                grounded.therapists = None
-                if status in {"auth_required", "premium_required"}:
-                    grounded.premium_cta = PremiumCta(enabled=True, message=context.therapist_search_message or "Premium access is required.")
-                    grounded.coach_message = context.therapist_search_message or grounded.coach_message
-                elif status is None and not context.user:
-                    grounded.premium_cta = PremiumCta(enabled=True, message="Please sign in to use therapist search.")
-                    grounded.coach_message = "Please sign in to use therapist search."
-                elif status is None and context.user and not context.user.is_premium:
-                    grounded.premium_cta = PremiumCta(enabled=True, message="Therapist search is available with premium access.")
-                    grounded.coach_message = "Therapist search is available with premium access."
-                elif status in {"no_results", "error"} and context.therapist_search_message:
-                    grounded.coach_message = context.therapist_search_message
-            payload = grounded.model_dump()
         return {"response_json": payload}
 
     return finalize_node
@@ -854,30 +795,26 @@ def build_graph(
     if retrieve_fn or llm_fn:
         return _legacy_build_graph(retrieve_fn=retrieve_fn, llm_fn=llm_fn)
     runtime_context = context or GraphRuntimeContext()
-    coach_tools, therapist_tools, booking_tools = _build_tools(runtime_context)
+    coach_tools, booking_tools = _build_tools(runtime_context)
     graph = StateGraph(AgentState)
     graph.add_node("safety", make_safety_node(runtime_context))
     graph.add_node("supervisor", make_supervisor_node(runtime_context))
     # True subgraphs — each has its own compiled StateGraph with START/END cycle
     graph.add_node("sentiment_agent", build_sentiment_subgraph())
     graph.add_node("coach_agent", build_coach_subgraph(coach_tools))
-    # Plain handler nodes (not agents — no reasoning loop of their own)
-    graph.add_node("therapist", make_therapist_node(therapist_tools, runtime_context))
-    graph.add_node("therapist_tools", ToolNode(therapist_tools))
-    graph.add_node("booking", make_booking_node(booking_tools, runtime_context))
-    graph.add_node("booking_tools", ToolNode(booking_tools))
+    graph.add_node("booking_agent", build_booking_subgraph(booking_tools, runtime_context))
+    # Deterministic handler node — no LLM loop; writes therapist_search + response_json into state
+    graph.add_node("therapist", make_therapist_node(runtime_context))
     graph.add_node("finalize", make_finalize_node(runtime_context))
     graph.add_edge(START, "safety")
     graph.add_conditional_edges("safety", _route_after_safety)
     graph.add_conditional_edges("supervisor", _route_after_supervisor)
-    # Sentiment subgraph output flows directly into coach subgraph; tool loop
-    # is encapsulated inside coach_agent — no coach_tools node in parent.
+    # Sentiment output flows directly into coach; both tool loops are encapsulated inside their subgraphs
     graph.add_edge("sentiment_agent", "coach_agent")
     graph.add_edge("coach_agent", "finalize")
-    graph.add_conditional_edges("therapist", _tool_route_for("therapist", "therapist_tools"))
-    graph.add_edge("therapist_tools", "therapist")
-    graph.add_conditional_edges("booking", _tool_route_for("booking", "booking_tools"))
-    graph.add_edge("booking_tools", "booking")
+    # Therapist sets response_json directly — direct edge to finalize, no tool wiring needed
+    graph.add_edge("therapist", "finalize")
+    graph.add_edge("booking_agent", "finalize")
     graph.add_edge("finalize", END)
     return graph.compile()
 
