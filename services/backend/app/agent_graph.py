@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Annotated, Any, Callable, Literal, TypedDict
 
 from fastapi import HTTPException
-from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -44,7 +44,7 @@ from .prompts import (
     SAFETY_GATE_MASTER_PROMPT,
 )
 from .safety import contains_jailbreak_attempt, is_crisis, is_prescription_request, scope_check
-from .schemas import ChatResponse, Resource, TherapistResult
+from .schemas import BookingProposal, ChatResponse, Resource, TherapistResult
 
 
 class TherapistSearch(TypedDict, total=False):
@@ -55,9 +55,10 @@ class TherapistSearch(TypedDict, total=False):
 
 
 class BookingAgentState(TypedDict, total=False):
-    """State for the booking subgraph — shares messages/active_node with parent."""
+    """State for the booking subgraph — shares messages/active_node/response_json with parent."""
     messages: Annotated[list[AnyMessage], add_messages]
     active_node: str
+    response_json: dict[str, Any]
 
 
 class AgentState(TypedDict, total=False):
@@ -226,39 +227,93 @@ def _build_tools(context: GraphRuntimeContext) -> tuple[list[BaseTool], list[Bas
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     def load_pending_booking_tool_impl() -> dict[str, Any]:
+        # main.py loads and *deletes* expired rows before the graph runs, setting
+        # context.pending_expired = True.  When this tool re-queries the DB the row
+        # is already gone, so load_pending_booking returns (None, False) — which
+        # would incorrectly overwrite the expired flag.  Capture it first.
+        original_expired = context.pending_expired
+
         if not context.db or not context.actor_key:
-            return {"pending": False, "expired": context.pending_expired}
-        pending_action, expired = load_pending_booking(context.db, context.actor_key)
+            if original_expired:
+                return {
+                    "status": "EXPIRED",
+                    "pending": False,
+                    "expired": True,
+                    "action_hint": "The booking has expired. Do NOT call send_pending_booking_email. Tell the user it expired and offer to start over.",
+                }
+            return {
+                "status": "NO_PENDING",
+                "pending": False,
+                "expired": False,
+                "action_hint": "No pending booking exists. Ask the user for therapist email and preferred date/time.",
+            }
+
+        pending_action, db_expired = load_pending_booking(context.db, context.actor_key)
+        expired = db_expired or original_expired  # preserve flag set during context setup
         context.pending_action = pending_action
         context.pending_expired = expired
+
+        if expired:
+            return {
+                "status": "EXPIRED",
+                "pending": False,
+                "expired": True,
+                "action_hint": "The booking has expired. Do NOT call send_pending_booking_email. Tell the user it expired and offer to start over.",
+            }
         if not pending_action:
-            return {"pending": False, "expired": expired}
+            return {
+                "status": "NO_PENDING",
+                "pending": False,
+                "expired": False,
+                "action_hint": "No pending booking exists. Ask the user for therapist email and preferred date/time.",
+            }
+        payload = parse_pending_payload(pending_action)
         return {
+            "status": "PENDING_READY",
             "pending": True,
-            "expired": expired,
-            "payload": parse_pending_payload(pending_action),
+            "expired": False,
+            "payload": payload,
             "expires_at": pending_action.expires_at.isoformat(),
+            "action_hint": (
+                f"A complete booking is ready to send to {payload.get('therapist_email', 'unknown')}. "
+                "If the user just said YES/confirm/ok/sure, call send_pending_booking_email immediately. "
+                "If the user said NO/cancel, call cancel_pending_booking."
+            ),
         }
 
     def prepare_booking_from_message_tool_impl(message: str) -> dict[str, Any]:
         if not context.db or not context.actor_key:
             return {"ok": False, "error": "Booking is unavailable right now."}
         extracted = extract_booking_data(message)
+
+        # Merge with any existing partial pending so multi-turn works correctly.
+        # e.g. turn 1 captures email; turn 2 provides the datetime — combine both.
+        existing_payload: dict[str, Any] = {}
+        if context.pending_action:
+            existing_payload = parse_pending_payload(context.pending_action)
+
+        merged_email = extracted.therapist_email or existing_payload.get("therapist_email")
+        merged_name = (
+            extracted.sender_name
+            or existing_payload.get("sender_name")
+            or (context.user.name if context.user and context.user.name else None)
+        )
+
         payload: dict[str, Any] = {
-            "therapist_email": extracted.therapist_email,
+            "therapist_email": merged_email,
             "requested_datetime_iso": extracted.requested_datetime.isoformat() if extracted.requested_datetime else None,
             "subject": None,
             "body": None,
             "reply_to": context.user.email if context.user and context.user.email else None,
-            "sender_name": extracted.sender_name or (context.user.name if context.user and context.user.name else None),
+            "sender_name": merged_name,
             "clarification": extracted.clarification,
         }
-        if extracted.therapist_email and extracted.requested_datetime:
+        if merged_email and extracted.requested_datetime:
             payload = build_booking_email_content(
                 user=context.user,
-                therapist_email=extracted.therapist_email,
+                therapist_email=merged_email,
                 requested_datetime=extracted.requested_datetime,
-                sender_name=extracted.sender_name,
+                sender_name=merged_name,
             )
         pending = save_pending_booking(context.db, context.actor_key, payload)
         context.pending_action = pending
@@ -288,15 +343,23 @@ def _build_tools(context: GraphRuntimeContext) -> tuple[list[BaseTool], list[Bas
             body=payload["body"],
             reply_to=payload.get("reply_to"),
         )
-        result = await ainvoke_mcp_tool(
-            "send_email_tool",
-            {
-                "to": email_payload.to,
-                "subject": email_payload.subject,
-                "body": email_payload.body,
-                "reply_to": email_payload.reply_to,
-            },
-        )
+        # Prefer the injected callable so that test monkeypatches are honoured;
+        # fall back to the async MCP tool in production where the callable is absent.
+        if context.send_email_fn is not None:
+            try:
+                result = context.send_email_fn(context.actor_key or "", email_payload)
+            except Exception as exc:
+                return {"ok": False, "error": f"Email send failed: {exc}"}
+        else:
+            result = await ainvoke_mcp_tool(
+                "send_email_tool",
+                {
+                    "to": email_payload.to,
+                    "subject": email_payload.subject,
+                    "body": email_payload.body,
+                    "reply_to": email_payload.reply_to,
+                },
+            )
         clear_pending_booking(context.db, pending_action)
         context.pending_action = None
         return {"ok": True, "message": "Email sent successfully.", "result": result}
@@ -511,6 +574,7 @@ def make_safety_node(context: GraphRuntimeContext):
             "Return only JSON with keys action, risk_level, coach_message, resources.\n"
             "Use action=stop for crisis, jailbreak, out-of-scope, or prescription/medical advice requests.\n"
             "Use action=continue only when the request should proceed to the supervisor.\n"
+            "Short replies of 1-3 words (yes, no, ok, cancel, confirm, sure, okay) are conversational follow-ups in an ongoing session; always use action=continue for these.\n"
             "Ordinary emotions like anxiety, stress, sadness, overwhelm, nervousness, and panic without self-harm intent should continue to the supervisor with risk_level=normal.\n"
             "Requests about finding therapists, therapist recommendations, booking appointments, sending booking emails, contacting therapists, or premium therapist access are in scope and should continue.\n"
             "Examples that should continue: 'please find me a therapist in karlskrona', 'can you find me a therapist?', 'send me an email?', 'book an appointment', 'contact a therapist for me'.\n"
@@ -565,6 +629,7 @@ def make_supervisor_node(context: GraphRuntimeContext):
             "- COACH: supportive coping conversation, emotional support, grounding, breathing, journaling, general mental wellbeing guidance.\n"
             "- Requests that mention therapist, counsellor, psychologist, psychiatrist, clinic, provider, or a city/location for therapist search should normally route to THERAPIST_SEARCH.\n"
             "- Requests that mention email, appointment, booking, schedule, contact therapist, send a message, reach out, or help me email should normally route to BOOKING_EMAIL.\n"
+            "- Standalone YES, NO, confirm, cancel, ok, sure replies always route to BOOKING_EMAIL regardless of pending state — the booking agent handles the no-pending case itself.\n"
             "- If there is pending booking state, route short follow-up replies like yes/no, times, or therapist emails to BOOKING_EMAIL.\n"
             "- If there is pending therapist-location state, route short city/postcode replies to THERAPIST_SEARCH.\n"
             "- Do not choose COACH when the user is clearly continuing a booking or therapist-search workflow.\n\n"
@@ -726,26 +791,45 @@ def make_therapist_node(context: GraphRuntimeContext):
 def build_booking_subgraph(tools: list[BaseTool], context: GraphRuntimeContext):
     """Return a compiled LangGraph subgraph for booking email handling.
 
-    The subgraph reads ``messages`` from the parent AgentState, runs the
-    booking LLM call, loops through tool calls internally (load → parse →
-    confirm/cancel/send), and writes the final AI message back to the parent
-    state via key-name merging.
+    Flow:
+      START → booking ──(tool_calls?)──→ tools ──→ booking
+                      ──(done)────────→ format_response → END
+
+    * ``booking_node``         – LLM agent with full tool access; reasons about
+                                  pending state, collects missing fields, calls tools.
+    * ``format_response_node`` – LLM with structured output (ChatResponse); reads
+                                  the full conversation + tool results and produces
+                                  the final response JSON.  No Python if/else.
+
+    Both nodes share ``messages``, ``active_node``, and ``response_json`` with the
+    parent ``AgentState`` via LangGraph key-name merging.
     """
 
-    def booking_node(state: BookingAgentState) -> BookingAgentState:
+    def booking_node(state: BookingAgentState) -> dict:
         pending_state = "pending_exists" if context.pending_action or context.pending_expired else "no_pending"
         prompt = (
             f"{BOOKING_EMAIL_MASTER_PROMPT}\n"
-            "You are the booking specialist inside a larger LangGraph system.\n"
-            f"Pending booking state at entry: {pending_state}.\n"
-            "Always call load_pending_booking first before deciding what to do.\n"
-            "If the user is starting or continuing a booking workflow, stay in booking mode.\n"
-            "If there is no pending request and the user says YES/NO/confirm/cancel, return guidance that no pending booking exists.\n"
-            "Use prepare_booking_from_message to parse and persist proposal state.\n"
-            "Use send_pending_booking_email only after explicit confirmation.\n"
-            "Use cancel_pending_booking when the user declines or cancels.\n"
-            "When information is missing, ask only for the missing fields.\n"
-            "Respond as the booking specialist; final app formatting happens later."
+            "You are the booking specialist inside a larger LangGraph multi-agent system.\n"
+            f"Pending booking state at session start: {pending_state}.\n\n"
+            "MANDATORY DECISION TREE — follow exactly, in order:\n"
+            "1. ALWAYS call load_pending_booking first.\n"
+            "2. Read the tool result status field, then act:\n"
+            "   status=PENDING_READY + user message contains YES/confirm/ok/sure/yep/yeah/send it:\n"
+            "       → YOU MUST call send_pending_booking_email immediately. Do NOT ask again.\n"
+            "   status=PENDING_READY + user message contains NO/cancel/nope/don't/stop:\n"
+            "       → call cancel_pending_booking.\n"
+            "   status=PENDING_READY + user provides NEW therapist email or datetime:\n"
+            "       → call prepare_booking_from_message to update the pending.\n"
+            "   status=PENDING_READY + no clear user action yet:\n"
+            "       → summarise the pending booking and ask user to confirm or cancel.\n"
+            "   status=NO_PENDING + user provides therapist email and/or datetime:\n"
+            "       → call prepare_booking_from_message.\n"
+            "   status=NO_PENDING + user says YES/confirm without providing details:\n"
+            "       → do NOT call any send/prepare tool. Explain there is no pending booking and ask for therapist email and date/time.\n"
+            "   status=EXPIRED:\n"
+            "       → do NOT call send_pending_booking_email. Explain the booking expired and offer to start over.\n"
+            "3. Always follow the action_hint field in the tool result.\n"
+            "Respond naturally; a separate formatter produces the final structured JSON."
         )
         response = _graph_model_response(prompt, state, tools=tools)  # type: ignore[arg-type]
         return {"active_node": "booking_agent", "messages": [response]}
@@ -754,14 +838,58 @@ def build_booking_subgraph(tools: list[BaseTool], context: GraphRuntimeContext):
         msg = _latest_ai_message(state)  # type: ignore[arg-type]
         if msg and msg.tool_calls:
             return "tools"
-        return END
+        return "format_response"
+
+    def format_response_node(state: BookingAgentState) -> dict:
+        """LLM with structured output: reads the full conversation + tool results
+        and returns a complete ChatResponse.  This is still LLM reasoning —
+        just schema-constrained output rather than free-form text."""
+        model = get_langchain_chat_model(temperature=0)
+        structured = model.with_structured_output(ChatResponse)
+        prompt = (
+            "You are the response formatter for a booking specialist agent.\n"
+            "Read the full conversation (including all tool call results) and produce a ChatResponse.\n\n"
+            "Priority rules (check in this order):\n"
+            "1. If send_pending_booking_email returned ok=true → coach_message confirms email was sent, requires_confirmation=false, booking_proposal=null.\n"
+            "2. If send_pending_booking_email returned ok=false with 'expired' in error → coach_message explains expiry, requires_confirmation=false, booking_proposal=null.\n"
+            "3. If load_pending_booking returned status=EXPIRED → coach_message explains booking expired, requires_confirmation=false, booking_proposal=null.\n"
+            "4. If cancel_pending_booking returned ok=true → coach_message confirms cancellation, requires_confirmation=false, booking_proposal=null.\n"
+            "5. If prepare_booking_from_message returned ok=true AND the payload has NON-NULL therapist_email, subject, AND body → requires_confirmation=true, set booking_proposal with all four fields (therapist_email, requested_time from payload.requested_datetime_iso, subject, body) and expires_at, coach_message asks the user to confirm sending.\n"
+            "   CRITICAL: Only set requires_confirmation=true for rule 5 if ALL three fields (therapist_email, subject, body) are present and non-null. If any is null/missing, use rule 7 instead.\n"
+            "6. If load_pending_booking returned status=PENDING_READY and the payload has NON-NULL therapist_email, subject, AND body, and no send/cancel/prepare happened → requires_confirmation=true, populate booking_proposal, coach_message asks user to confirm or cancel.\n"
+            "   CRITICAL: Only use rule 6 if therapist_email, subject, and body are all non-null in the payload.\n"
+            "7. If information is still missing (therapist email not yet provided, or date/time not yet provided, or subject/body could not be built) → requires_confirmation=false, booking_proposal=null, coach_message asks only for the specific missing field(s).\n"
+            "8. If load_pending_booking returned status=NO_PENDING and no prepare was called → requires_confirmation=false, booking_proposal=null, coach_message explains no pending booking exists and asks for therapist email and date/time.\n"
+            "Never set booking_proposal unless you have non-null values for therapist_email, requested_time, subject, and body.\n"
+            "Never invent booking details not present in tool output.\n"
+            "Set risk_level=normal unless the conversation indicates otherwise."
+        )
+        try:
+            result = structured.invoke([SystemMessage(content=prompt), *state["messages"]])
+            if isinstance(result, ChatResponse):
+                return {"active_node": "booking_agent", "response_json": result.model_dump()}
+            if isinstance(result, dict):
+                return {"active_node": "booking_agent", "response_json": ChatResponse.model_validate(result).model_dump()}
+        except Exception:
+            # Pydantic validation or LLM parsing failed (e.g. LLM tried to set
+            # booking_proposal with null required fields).  Return a safe fallback.
+            return {
+                "active_node": "booking_agent",
+                "response_json": ChatResponse(
+                    coach_message="I need a few more details. Could you provide the therapist's email and preferred date/time for the appointment?",
+                    requires_confirmation=False,
+                ).model_dump(),
+            }
+        return {}
 
     g: StateGraph = StateGraph(BookingAgentState)
     g.add_node("booking", booking_node)
     g.add_node("tools", ToolNode(tools))
+    g.add_node("format_response", format_response_node)
     g.add_edge(START, "booking")
     g.add_conditional_edges("booking", _booking_route)
     g.add_edge("tools", "booking")
+    g.add_edge("format_response", END)
     return g.compile()
 
 

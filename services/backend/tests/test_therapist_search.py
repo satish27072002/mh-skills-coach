@@ -127,10 +127,15 @@ def test_therapists_route_mcp_timeout_returns_502(monkeypatch, test_db):
 
 def test_premium_gating_therapist_search(test_db):
     free_user = _create_user(is_premium=False)
-    client = TestClient(app)
-    client.cookies.set(settings.session_cookie_name, str(free_user.id))
-
-    response = client.post("/therapists/search", json={"location": "Stockholm"})
+    # Premium gating is only enforced when dev_mode=False.
+    original_dev_mode = settings.dev_mode
+    settings.dev_mode = False
+    try:
+        client = TestClient(app)
+        client.cookies.set(settings.session_cookie_name, str(free_user.id))
+        response = client.post("/therapists/search", json={"location": "Stockholm"})
+    finally:
+        settings.dev_mode = original_dev_mode
 
     assert response.status_code == 403
 

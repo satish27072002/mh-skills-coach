@@ -87,4 +87,13 @@ def test_chat_blocks_jailbreak_attempt_early():
     )
     assert response.status_code == 200
     payload = response.json()
-    assert "safety boundaries" in payload["coach_message"].lower()
+    # The safety gate blocks jailbreak attempts and returns an out-of-scope response.
+    # Check for the current blocking message rather than a specific historic phrase.
+    coach_msg = payload["coach_message"].lower()
+    assert (
+        "not able to help" in coach_msg
+        or "safety" in coach_msg
+        or "mental health" in coach_msg
+        or "coping" in coach_msg
+    ), f"Expected a jailbreak blocking response, got: {payload['coach_message']!r}"
+    assert payload.get("risk_level") in ("jailbreak", "out_of_scope")

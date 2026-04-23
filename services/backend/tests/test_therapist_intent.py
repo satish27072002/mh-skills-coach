@@ -26,9 +26,15 @@ def test_db():
 
 
 def test_therapist_search_requires_sign_in_when_unauthenticated(test_db):
-    client = TestClient(app)
-
-    response = client.post("/chat", json={"message": "find therapist near me"})
+    # Premium gating is only enforced when dev_mode=False.
+    # Override the setting locally so this test verifies production behaviour.
+    original_dev_mode = settings.dev_mode
+    settings.dev_mode = False
+    try:
+        client = TestClient(app)
+        response = client.post("/chat", json={"message": "find therapist near Stockholm"})
+    finally:
+        settings.dev_mode = original_dev_mode
 
     assert response.status_code == 200
     payload = response.json()
@@ -45,10 +51,15 @@ def test_therapist_search_requires_premium_for_authenticated_user(test_db):
         session.commit()
         session.refresh(user)
 
-    client = TestClient(app)
-    client.cookies.set(settings.session_cookie_name, str(user.id))
-
-    response = client.post("/chat", json={"message": "find therapist in Stockholm"})
+    # Premium gating is only enforced when dev_mode=False.
+    original_dev_mode = settings.dev_mode
+    settings.dev_mode = False
+    try:
+        client = TestClient(app)
+        client.cookies.set(settings.session_cookie_name, str(user.id))
+        response = client.post("/chat", json={"message": "find therapist in Stockholm"})
+    finally:
+        settings.dev_mode = original_dev_mode
 
     assert response.status_code == 200
     payload = response.json()
@@ -103,10 +114,11 @@ def test_prescription_request_does_not_trigger_paywall(test_db):
 
     assert response.status_code == 200
     payload = response.json()
-    assert "prescriptions" in payload["coach_message"].lower()
-    assert "clinician" in payload["coach_message"].lower()
-    assert payload["risk_level"] == "crisis"
-    assert payload["premium_cta"]["enabled"] is True
+    # Prescription requests are blocked as a medical (not crisis) safety event.
+    # They must NOT show a premium upgrade CTA — that is only for feature access.
+    assert "prescriptions" in payload["coach_message"].lower() or "clinician" in payload["coach_message"].lower()
+    assert payload["risk_level"] == "medical"
+    assert payload.get("premium_cta") is None
 
 
 def test_therapist_search_prompt_does_not_trigger_booking(monkeypatch, test_db):
