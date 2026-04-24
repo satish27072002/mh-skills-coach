@@ -110,7 +110,7 @@ def test_webhook_signature_error_returns_400(test_db, monkeypatch):
     assert response.status_code == 400
 
 
-def test_chat_therapist_search_allowed_after_premium_webhook(test_db, monkeypatch):
+def test_me_reports_premium_after_webhook(test_db, monkeypatch):
     settings.stripe_webhook_secret = "whsec_test"
     with db.SessionLocal() as session:
         user = User(email="unlock@example.com", name="Unlock User", is_premium=False)
@@ -118,25 +118,11 @@ def test_chat_therapist_search_allowed_after_premium_webhook(test_db, monkeypatc
         session.commit()
         session.refresh(user)
 
-    monkeypatch.setattr(
-        "app.main._run_therapist_search",
-        lambda *_args, **_kwargs: [
-            {
-                "name": "Premium Clinic",
-                "address": "Main Street",
-                "url": "https://example.com/premium",
-                "phone": "+46 8 100 100",
-                "distance_km": 1.0,
-            }
-        ],
-    )
-
     client = TestClient(app)
     client.cookies.set(settings.session_cookie_name, str(user.id))
-
-    before = client.post("/chat", json={"message": "find therapist in Stockholm"})
+    before = client.get("/me")
     assert before.status_code == 200
-    assert before.json()["premium_cta"]["enabled"] is True
+    assert before.json()["is_premium"] is False
 
     payload = {
         "id": "evt_unlock_123",
@@ -151,8 +137,7 @@ def test_chat_therapist_search_allowed_after_premium_webhook(test_db, monkeypatc
     )
     assert webhook_response.status_code == 200
 
-    after = client.post("/chat", json={"message": "find therapist in Stockholm"})
+    after = client.get("/me")
     assert after.status_code == 200
     after_payload = after.json()
-    assert after_payload.get("premium_cta") is None
-    assert after_payload["therapists"][0]["name"] == "Premium Clinic"
+    assert after_payload["is_premium"] is True

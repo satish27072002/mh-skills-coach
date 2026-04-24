@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Callable
 
 from fastapi import HTTPException, Request
@@ -10,9 +10,6 @@ from app.models import User
 from app.prompts import THERAPIST_SEARCH_MASTER_PROMPT
 from app.schemas import ChatResponse, PremiumCta, TherapistResult
 
-
-LAST_THERAPIST_LOCATION_BY_SESSION: dict[str, str] = {}
-PENDING_THERAPIST_QUERY_BY_SESSION: dict[str, "TherapistSearchParams"] = {}
 
 CITY_TOKEN_RE = re.compile(r"^[\w\-\s]{2,40}$", flags=re.IGNORECASE)
 SYSTEM_PROMPT = THERAPIST_SEARCH_MASTER_PROMPT
@@ -116,59 +113,6 @@ def normalize_specialty(specialty: str | None) -> str | None:
     return normalized or None
 
 
-def _session_location_key(user: User | None, request: Request, session_cookie_name: str) -> str | None:
-    if user:
-        return f"user:{user.id}"
-    session_cookie = request.cookies.get(session_cookie_name)
-    if session_cookie:
-        return f"session:{session_cookie}"
-    user_agent = (request.headers.get("user-agent") or "").strip()[:40]
-    client_host = request.client.host if request.client else "unknown"
-    return f"anon:{client_host}:{user_agent}"
-
-
-def remember_location(
-    *,
-    user: User | None,
-    request: Request,
-    location: str | None,
-    session_cookie_name: str,
-) -> None:
-    if not location:
-        return
-    normalized = location.strip()
-    if not normalized:
-        return
-    key = _session_location_key(user, request, session_cookie_name)
-    if not key:
-        return
-    LAST_THERAPIST_LOCATION_BY_SESSION[key] = normalized
-
-
-def clear_remembered_location(
-    *,
-    user: User | None,
-    request: Request,
-    session_cookie_name: str,
-) -> None:
-    key = _session_location_key(user, request, session_cookie_name)
-    if not key:
-        return
-    LAST_THERAPIST_LOCATION_BY_SESSION.pop(key, None)
-
-
-def get_remembered_location(
-    *,
-    user: User | None,
-    request: Request,
-    session_cookie_name: str,
-) -> str | None:
-    key = _session_location_key(user, request, session_cookie_name)
-    if not key:
-        return None
-    return LAST_THERAPIST_LOCATION_BY_SESSION.get(key)
-
-
 @dataclass(frozen=True)
 class TherapistSearchParams:
     location_text: str | None
@@ -201,58 +145,6 @@ class TherapistSearchHandler:
             specialty=normalize_specialty(extract_specialty(message)),
             limit=extract_limit(message),
         )
-
-    def remember_location(self, *, user: User | None, request: Request, location: str | None) -> None:
-        remember_location(
-            user=user,
-            request=request,
-            location=location,
-            session_cookie_name=self._session_cookie_name,
-        )
-
-    def get_remembered_location(self, *, user: User | None, request: Request) -> str | None:
-        return get_remembered_location(
-            user=user,
-            request=request,
-            session_cookie_name=self._session_cookie_name,
-        )
-
-    def clear_remembered_location(self, *, user: User | None, request: Request) -> None:
-        clear_remembered_location(
-            user=user,
-            request=request,
-            session_cookie_name=self._session_cookie_name,
-        )
-
-    def has_pending_location_request(self, *, user: User | None, request: Request) -> bool:
-        key = _session_location_key(user, request, self._session_cookie_name)
-        if not key:
-            return False
-        return key in PENDING_THERAPIST_QUERY_BY_SESSION
-
-    def _get_pending_query(self, *, user: User | None, request: Request) -> TherapistSearchParams | None:
-        key = _session_location_key(user, request, self._session_cookie_name)
-        if not key:
-            return None
-        return PENDING_THERAPIST_QUERY_BY_SESSION.get(key)
-
-    def _set_pending_query(
-        self,
-        *,
-        user: User | None,
-        request: Request,
-        query: TherapistSearchParams,
-    ) -> None:
-        key = _session_location_key(user, request, self._session_cookie_name)
-        if not key:
-            return
-        PENDING_THERAPIST_QUERY_BY_SESSION[key] = query
-
-    def _clear_pending_query(self, *, user: User | None, request: Request) -> None:
-        key = _session_location_key(user, request, self._session_cookie_name)
-        if not key:
-            return
-        PENDING_THERAPIST_QUERY_BY_SESSION.pop(key, None)
 
     @staticmethod
     def _looks_like_location_reply(message: str) -> bool:
@@ -318,27 +210,12 @@ class TherapistSearchHandler:
             )
 
         parsed = self.parse_message(message)
-        pending_query = self._get_pending_query(user=user, request=request)
         location = parsed.location_text
-        if not location and pending_query and self._looks_like_location_reply(message):
-            location = extract_location_from_short_reply(message)
-            parsed = replace(
-                pending_query,
-                location_text=location,
-                radius_km=extract_radius_km(message) or pending_query.radius_km,
-                specialty=normalize_specialty(extract_specialty(message)) or pending_query.specialty,
-                limit=extract_limit(message) if re.search(r"\d", message) else pending_query.limit,
-            )
         if not location:
-            # Avoid leaking previous search context into a new therapist-search request.
-            self.clear_remembered_location(user=user, request=request)
-            self._clear_pending_query(user=user, request=request)
-            self._set_pending_query(user=user, request=request, query=parsed)
             return ChatResponse(
                 coach_message="Please share a city or postcode so I can search nearby providers.",
                 therapists=[],
             )
-        self._clear_pending_query(user=user, request=request)
 
         try:
             results, fallback_reason = self.search_with_retries(
@@ -362,7 +239,6 @@ class TherapistSearchHandler:
                 therapists=[],
             )
 
-        self.remember_location(user=user, request=request, location=location)
         if fallback_reason == "specialty":
             return ChatResponse(
                 coach_message="No exact specialty match; showing nearby providers.",

@@ -1,7 +1,6 @@
 import base64
 import hashlib
 import json
-import logging
 import re
 import secrets
 import urllib.parse
@@ -14,6 +13,7 @@ from zoneinfo import ZoneInfo
 # Monitoring & security — must be imported before first use
 from .monitoring.logger import configure_logging, get_logger, log_event, new_correlation_id, set_correlation_id, Timer
 from .security.rate_limiter import RateLimiter, RateLimitExceeded
+from .runtime_requirements import ensure_backend_requirements
 
 import httpx
 import stripe
@@ -25,26 +25,13 @@ from google.oauth2 import id_token as google_id_token
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .agents import BookingEmailHandler, ChatRouter, RouterInput, SafetyGate, TherapistSearchHandler
-from .agents.therapist_agent import LAST_THERAPIST_LOCATION_BY_SESSION
+from .agents import BookingEmailHandler, ChatRouter, TherapistSearchHandler
 from .config import settings
 from .agent_graph import GraphRuntimeContext, run_agent
-from .booking import (
-    BOOKING_TTL_MINUTES,
-    STOCKHOLM_TZ,
-    build_booking_email_content,
-    clear_pending_booking,
-    extract_booking_data,
-    is_affirmative,
-    is_booking_intent,
-    is_negative,
-    load_pending_booking,
-    parse_pending_payload,
-    save_pending_booking,
-)
+from .booking import STOCKHOLM_TZ
 from .db import ensure_embedding_dimension_compatible, get_db, init_db, pgvector_ready
 from .embed_dimension import get_active_embedding_dim, get_cached_embedding_dim
-from .email_orchestrator import EmailSendPayload, send_email_for_user
+from .email_orchestrator import send_email_for_user
 from .llm.provider import (
     ConfigurationError,
     probe_openai_connectivity,
@@ -52,20 +39,12 @@ from .llm.provider import (
 )
 from .mcp_client import mcp_therapist_search, probe_mcp_health
 from .models import StripeEvent, User
-from .safety import (
-    classify_intent,
-    contains_jailbreak_attempt,
-    is_prescription_request,
-    scope_check,
-    route_message,
-    is_crisis,
-)
+from .persistence import GuestPromptStore
 from .schemas import (
     BookingProposal,
     ChatRequest,
     ChatResponse,
     CheckoutSessionResponse,
-    PremiumCta,
     TherapistSearchRequest,
     TherapistSearchResponse
 )
@@ -74,6 +53,7 @@ from .schemas import (
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     import os
+    ensure_backend_requirements()
     # Configure LangSmith tracing if API key is present
     if settings.langsmith_api_key:
         os.environ["LANGSMITH_API_KEY"] = settings.langsmith_api_key
@@ -129,7 +109,6 @@ configure_logging(level=settings.log_level, fmt=settings.log_format)
 logger = get_logger(__name__)
 
 UTC = ZoneInfo("UTC")
-_LAST_THERAPIST_LOCATION_BY_SESSION = LAST_THERAPIST_LOCATION_BY_SESSION
 
 # ---------------------------------------------------------------------------
 # Rate limiter — shared across requests (in-process, thread-safe)
@@ -140,54 +119,63 @@ _rate_limiter = RateLimiter(
 )
 
 # ---------------------------------------------------------------------------
-# Conversation history store — keyed by session ID
-# Stores list of {"role": "user"/"assistant", "content": "..."} dicts
-# Capped at settings.conversation_history_max_turns * 2 messages
-# ---------------------------------------------------------------------------
-_conversation_store: dict[str, list[dict[str, str]]] = {}
-
-# ---------------------------------------------------------------------------
 # Guest mode: track prompt counts per guest session token
 # ---------------------------------------------------------------------------
-_guest_prompt_counts: dict[str, int] = {}
+_guest_prompt_store = GuestPromptStore()
 GUEST_SESSION_COOKIE_NAME = settings.guest_session_cookie_name
 
 
-def _get_session_key(user: Any, request: Any) -> str:
-    """Build a stable session key from user ID or session cookie."""
+def _get_session_key(user: Any, request: Any, *, anon_token: str | None = None) -> str:
+    """Build a stable session key from (in priority order):
+      1. the authenticated user id
+      2. the auth session cookie (pre-user-row)
+      3. the guest session cookie (explicit /guest flow)
+      4. the anonymous session cookie (minted on first /chat for everyone else)
+      5. client IP (last-resort fallback; only used when cookies are disabled)
+
+    ``anon_token`` is an override — pass the token returned by
+    ``_ensure_anon_session_token`` so that a cookie minted THIS request is
+    honoured before it has been round-tripped back to the client.
+
+    Keying on a stable per-browser cookie rather than IP prevents users behind
+    the same NAT/proxy from sharing rate-limit buckets or graph checkpoints.
+    """
     if user and hasattr(user, "id"):
         return f"user:{user.id}"
     session_cookie = request.cookies.get(settings.session_cookie_name)
     if session_cookie:
         return f"session:{session_cookie}"
-    # Fallback to client IP
+    guest_cookie = request.cookies.get(settings.guest_session_cookie_name)
+    if guest_cookie:
+        return f"guest:{guest_cookie}"
+    anon_cookie = anon_token or request.cookies.get(settings.anon_session_cookie_name)
+    if anon_cookie:
+        return f"anon:{anon_cookie}"
+    # Last-resort fallback: client IP.  Only reached when the browser rejects
+    # cookies entirely.  Preserved so we never return None / 500.
     client_host = getattr(request.client, "host", "unknown") if request.client else "unknown"
     return f"ip:{client_host}"
 
 
-def _load_history(session_key: str) -> list[dict[str, str]]:
-    """Load conversation history for a session."""
-    return list(_conversation_store.get(session_key, []))
+def _ensure_anon_session_token(request: Request, response: Response) -> str:
+    """Return the anon session token from cookie, minting a stable one (30d)
+    if the browser doesn't have one yet.
 
-
-def _save_history(session_key: str, history: list[dict[str, str]]) -> None:
-    """Save conversation history, capping at max turns."""
-    max_messages = settings.conversation_history_max_turns * 2  # user + assistant per turn
-    if len(history) > max_messages:
-        history = history[-max_messages:]
-    _conversation_store[session_key] = history
-
-
-def _append_to_history(
-    session_key: str,
-    user_message: str,
-    assistant_message: str,
-) -> None:
-    """Append a user+assistant exchange to conversation history."""
-    history = _load_history(session_key)
-    history.append({"role": "user", "content": user_message})
-    history.append({"role": "assistant", "content": assistant_message})
-    _save_history(session_key, history)
+    Called at /chat entry for unauthenticated traffic so that rate limiting
+    and session identity are per-browser, not per-IP.
+    """
+    existing = request.cookies.get(settings.anon_session_cookie_name)
+    if existing and existing.strip():
+        return existing.strip()
+    token = secrets.token_urlsafe(24)
+    _set_cookie(
+        response,
+        settings.anon_session_cookie_name,
+        token,
+        request=request,
+        max_age=settings.anon_session_cookie_max_age,
+    )
+    return token
 
 
 # ---------------------------------------------------------------------------
@@ -203,98 +191,11 @@ def _get_guest_session_token(request: Request) -> str | None:
 
 
 def _get_guest_prompt_count(token: str) -> int:
-    """Return the number of prompts used by a guest session."""
-    return _guest_prompt_counts.get(token, 0)
+    return _guest_prompt_store.get_count(token)
 
 
 def _increment_guest_prompt_count(token: str) -> int:
-    """Increment and return the guest prompt count."""
-    count = _guest_prompt_counts.get(token, 0) + 1
-    _guest_prompt_counts[token] = count
-    return count
-
-
-def _extract_location(message: str) -> str | None:
-    match = re.search(r"\b(?:near|in|around|at)\s+(.+)", message, flags=re.IGNORECASE)
-    if match:
-        tail = re.split(
-            r"\bwithin\s+\d+\s*(?:km|kilometers?|kilometres?)?\b|\bfor\b|[,.!?]",
-            match.group(1),
-            maxsplit=1,
-            flags=re.IGNORECASE,
-        )[0]
-        location = tail.strip(" .?")
-        if location.lower() in {"me", "here", "my area"}:
-            return None
-        return location or None
-    return None
-
-
-def _extract_radius_km(message: str) -> int | None:
-    match = re.search(
-        r"\bwithin\s+(\d{1,3})(?:\s*(?:km|kilometers?|kilometres?))?\b",
-        message,
-        flags=re.IGNORECASE
-    )
-    if not match:
-        match = re.search(
-            r"\b(\d{1,3})\s*(?:km|kilometers?|kilometres?)\b",
-            message,
-            flags=re.IGNORECASE
-        )
-    if not match:
-        return None
-    return min(max(int(match.group(1)), 1), 50)
-
-
-def _extract_specialty(message: str) -> str | None:
-    match = re.search(r"\bfor\s+(.+)", message, flags=re.IGNORECASE)
-    if not match:
-        return None
-    candidate = re.split(
-        r"\bwithin\s+\d+\s*(?:km|kilometers?|kilometres?)?\b|\b(?:near|in|around|at)\b|[,.!?]",
-        match.group(1),
-        maxsplit=1,
-        flags=re.IGNORECASE,
-    )[0].strip(" .?")
-    if not candidate or candidate.lower() in {"me", "here", "my area"}:
-        return None
-    return candidate
-
-
-def _normalize_specialty(specialty: str | None) -> str | None:
-    if specialty is None:
-        return None
-    normalized = specialty.strip()
-    return normalized or None
-
-
-def _session_location_key(user: User | None, request: Request) -> str | None:
-    if user:
-        return f"user:{user.id}"
-    session_cookie = request.cookies.get(settings.session_cookie_name)
-    if session_cookie:
-        return f"session:{session_cookie}"
-    return None
-
-
-def _remember_therapist_location(user: User | None, request: Request, location: str | None) -> None:
-    if not location:
-        return
-    normalized = location.strip()
-    if not normalized:
-        return
-    key = _session_location_key(user, request)
-    if not key:
-        return
-    _LAST_THERAPIST_LOCATION_BY_SESSION[key] = normalized
-
-
-def _get_remembered_therapist_location(user: User | None, request: Request) -> str | None:
-    key = _session_location_key(user, request)
-    if not key:
-        return None
-    return _LAST_THERAPIST_LOCATION_BY_SESSION.get(key)
+    return _guest_prompt_store.increment(token)
 
 
 def _run_therapist_search(
@@ -306,143 +207,8 @@ def _run_therapist_search(
     return mcp_therapist_search(
         location_text=location,
         radius_km=radius_km,
-        specialty=_normalize_specialty(specialty),
+        specialty=specialty.strip() if specialty and specialty.strip() else None,
         limit=min(max(limit, 1), 10),
-    )
-
-
-def _therapist_search_with_retries(
-    *,
-    location: str,
-    radius_km: int | None,
-    specialty: str | None
-) -> tuple[list, str | None]:
-    requested_radius = min(max(radius_km, 1), 50) if radius_km is not None else None
-    normalized_specialty = _normalize_specialty(specialty)
-    attempts: list[tuple[int | None, str | None, str | None]] = [
-        (requested_radius, normalized_specialty, None),
-    ]
-    if normalized_specialty:
-        attempts.append((requested_radius, None, "specialty"))
-    if requested_radius is None or requested_radius < 25:
-        attempts.append((25, None, "radius"))
-
-    deduped_attempts: list[tuple[int | None, str | None, str | None]] = []
-    seen: set[tuple[int | None, str | None]] = set()
-    for radius, attempt_specialty, reason in attempts:
-        dedupe_key = (radius, attempt_specialty)
-        if dedupe_key in seen:
-            continue
-        seen.add(dedupe_key)
-        deduped_attempts.append((radius, attempt_specialty, reason))
-
-    for radius, attempt_specialty, reason in deduped_attempts:
-        results = _run_therapist_search(
-            location=location,
-            radius_km=radius,
-            specialty=attempt_specialty
-        )
-        if results:
-            return results, reason
-
-    return [], None
-
-
-def _chat_therapist_search_response(user: User | None, request: Request, message: str) -> ChatResponse:
-    if not user:
-        return ChatResponse(
-            coach_message="Please sign in to use therapist search.",
-            premium_cta=PremiumCta(
-                enabled=True,
-                message="Sign in and upgrade to premium to unlock therapist search."
-            )
-        )
-    if not user.is_premium and not settings.dev_mode:
-        return ChatResponse(
-            coach_message="Therapist search is available with premium access.",
-            premium_cta=PremiumCta(
-                enabled=True,
-                message="Unlock therapist search to see local providers."
-            )
-        )
-    location = _extract_location(message) or "your area"
-    radius_km = _extract_radius_km(message)
-    specialty = _extract_specialty(message)
-    fallback_reason: str | None = None
-
-    try:
-        results, fallback_reason = _therapist_search_with_retries(
-            location=location,
-            radius_km=radius_km,
-            specialty=specialty
-        )
-    except HTTPException:
-        results = []
-
-    if not results:
-        return ChatResponse(
-            coach_message=f"No providers found near {location}. Try a nearby city or postcode.",
-            therapists=[]
-        )
-    _remember_therapist_location(user=user, request=request, location=location)
-    if fallback_reason:
-        if fallback_reason == "specialty":
-            coach_message = "No exact specialty match; showing nearby providers."
-        else:
-            coach_message = "No providers found in the requested radius; showing nearby providers."
-        return ChatResponse(
-            coach_message=coach_message,
-            therapists=results
-        )
-    return ChatResponse(
-        coach_message=f"Here are therapist options near {location}.",
-        therapists=results
-    )
-
-
-def _chat_crisis_response(user: User | None, request: Request, message: str) -> ChatResponse:
-    location = _extract_location(message) or _get_remembered_therapist_location(user, request) or "Stockholm"
-    requested_radius = _extract_radius_km(message) or 25
-    radius_km = min(max(requested_radius, 1), 50)
-    specialty = _extract_specialty(message)
-
-    therapists: list = []
-    try:
-        therapists, _ = _therapist_search_with_retries(
-            location=location,
-            radius_km=radius_km,
-            specialty=specialty
-        )
-    except HTTPException:
-        therapists = []
-
-    if therapists:
-        _remember_therapist_location(user=user, request=request, location=location)
-
-    return ChatResponse(
-        coach_message=(
-            "I am really glad you reached out. Please seek immediate support right now. "
-            "If you might act on these thoughts or are in immediate danger, call 112 immediately. "
-            "You can also contact Mind Självmordslinjen at 90101 (chat/phone) for urgent emotional support, "
-            "and use 1177 Vårdguiden for healthcare guidance and where to get care."
-        ),
-        resources=[
-            {
-                "title": "Emergency services (Sweden) - 112",
-                "url": "https://www.112.se/"
-            },
-            {
-                "title": "Mind Självmordslinjen - 90101",
-                "url": "https://mind.se/hitta-hjalp/sjalvmordslinjen/"
-            },
-            {
-                "title": "1177 Vårdguiden",
-                "url": "https://www.1177.se/"
-            }
-        ],
-        therapists=therapists,
-        risk_level="crisis",
-        premium_cta=None
     )
 
 
@@ -886,7 +652,7 @@ def guest_start(request: Request) -> JSONResponse:
                 "guest_prompts_remaining": max(0, settings.guest_prompt_limit - used),
             })
         token = secrets.token_urlsafe(24)
-        _guest_prompt_counts[token] = 0
+        _guest_prompt_store.initialize(token)
         response = JSONResponse(content={
             "status": "ok",
             "is_guest": True,
@@ -905,9 +671,13 @@ def guest_start(request: Request) -> JSONResponse:
 
 
 @app.post("/logout")
-def logout() -> JSONResponse:
+def logout(request: Request) -> JSONResponse:
+    guest_token = _get_guest_session_token(request)
+    if guest_token:
+        _guest_prompt_store.delete(guest_token)
     response = JSONResponse(content={"status": "ok"})
     response.delete_cookie(settings.session_cookie_name)
+    response.delete_cookie(GUEST_SESSION_COOKIE_NAME)
     response.delete_cookie(BOOKING_SESSION_COOKIE_NAME)
     return response
 
@@ -930,7 +700,6 @@ def therapists_search(
         specialty=None,
         limit=payload.limit,
     )
-    therapist_agent.remember_location(user=user, request=request, location=payload.location_text)
     return TherapistSearchResponse(results=results)
 
 
@@ -947,7 +716,15 @@ def chat(
 
     message = payload.message.strip()
     user = _get_user_from_cookie(db, request)
-    session_key = _get_session_key(user, request)
+
+    # Mint a stable anonymous session cookie BEFORE building the session key,
+    # so unauthenticated users get per-browser identity (not per-IP).  This
+    # prevents users behind the same NAT from sharing rate-limit buckets.
+    anon_token: str | None = None
+    if not user:
+        anon_token = _ensure_anon_session_token(request, response)
+
+    session_key = _get_session_key(user, request, anon_token=anon_token)
 
     # --- Guest mode: enforce prompt limit ---
     guest_token: str | None = None
@@ -974,9 +751,13 @@ def chat(
         return result
 
     # --- Rate limiting ---
+    # Prefer, in order: auth session cookie → explicit guest token → anon
+    # cookie → client IP.  The anon cookie guarantees per-browser isolation
+    # so users behind the same NAT get independent buckets.
     client_key = (
         request.cookies.get(settings.session_cookie_name)
-        or (guest_token if guest_token else None)
+        or guest_token
+        or anon_token
         or (request.client.host if request.client else "unknown")
     )
     try:
@@ -991,15 +772,6 @@ def chat(
     # --- Safety gate FIRST (crisis / jailbreak via SafetyGate) ---
     # Must run before scope_check so that crisis messages are never blocked as out-of-scope.
     actor_key = _get_booking_actor_key(user, request)
-    pending_action = None
-    pending_expired = False
-    if actor_key:
-        try:
-            pending_action, pending_expired = load_pending_booking(db, actor_key)
-        except Exception:
-            pending_action, pending_expired = None, False
-
-    history = _load_history(session_key)
     if not actor_key and user:
         actor_key = str(user.id)
     elif not actor_key:
@@ -1008,13 +780,11 @@ def chat(
     with Timer() as t:
         response_json = run_agent(
             message,
-            history=history,
+            session_id=session_key,
             context=GraphRuntimeContext(
                 db=db,
                 user=user,
                 actor_key=actor_key,
-                pending_action=pending_action,
-                pending_expired=pending_expired,
                 request=request,
                 therapist_search_fn=_run_therapist_search,
                 send_email_fn=send_email_for_user,
@@ -1023,7 +793,6 @@ def chat(
     log_event("llm_call", route="LANGGRAPH_SUPERVISOR", duration_ms=round(t.elapsed_ms), correlation_id=correlation_id)
 
     final_response = ChatResponse(**response_json)
-    _append_to_history(session_key, message, final_response.coach_message or "")
     return _count_guest_prompt(final_response)
 
 

@@ -82,10 +82,6 @@ def crisis_db():
 
 
 def test_crisis_response_includes_hotlines_and_therapists(monkeypatch, crisis_db):
-    from app import main as app_main
-
-    app_main._LAST_THERAPIST_LOCATION_BY_SESSION.clear()
-
     client = TestClient(app)
 
     response = client.post("/chat", json={"message": "I want to die"})
@@ -145,19 +141,15 @@ def test_crisis_with_location_triggers_therapist_search(monkeypatch, crisis_db):
 
 
 def test_crisis_response_reuses_last_session_location(monkeypatch, crisis_db):
-    from app import main as app_main
-
     with db.SessionLocal() as session:
         user = User(email="crisis@example.com", name="Crisis User", is_premium=True)
         session.add(user)
         session.commit()
         session.refresh(user)
 
-    app_main._LAST_THERAPIST_LOCATION_BY_SESSION.clear()
-    app_main._LAST_THERAPIST_LOCATION_BY_SESSION[f"user:{user.id}"] = "Uppsala"
     captured: dict[str, object] = {}
 
-    def stub_search_with_retries(self, *, location_text: str, radius_km: int | None, specialty: str | None):
+    def stub_search_with_retries(self, *, location_text: str, radius_km: int | None, specialty: str | None, limit: int | None = None):
         captured["location"] = location_text
         return ([], None)
 
@@ -167,6 +159,8 @@ def test_crisis_response_reuses_last_session_location(monkeypatch, crisis_db):
     )
     client = TestClient(app)
     client.cookies.set(settings.session_cookie_name, str(user.id))
+    first = client.post("/chat", json={"message": "Find therapists near Uppsala"})
+    assert first.status_code == 200
 
     response = client.post("/chat", json={"message": "I'm going to hurt myself"})
 

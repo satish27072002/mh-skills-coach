@@ -1,155 +1,83 @@
-"""
-Conversation continuity tests — context retained across 3+ message exchanges.
-
-Verifies:
-1. Conversation history accumulates across multiple /chat requests
-2. History is keyed by session (different sessions have separate histories)
-3. History is capped at max turns
-4. Both user and assistant messages are stored
-
-Run with:
-    pytest tests/test_conversation_continuity.py -v
-"""
 from __future__ import annotations
 
-import pytest
 from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage
 
+from app import agent_graph
+from app.agent_graph import GraphRuntimeContext, load_conversation_history, run_agent
 from app.config import settings
-from app.main import (
-    _conversation_store,
-    _load_history,
-    _append_to_history,
-    _save_history,
-    app,
-)
+from app.main import app
 
 
-# ---------------------------------------------------------------------------
-# Direct unit tests on history functions
-# ---------------------------------------------------------------------------
-
-def test_append_to_history_stores_both_roles() -> None:
-    """_append_to_history stores both user and assistant messages."""
-    key = "test:append"
-    _conversation_store.pop(key, None)
-
-    _append_to_history(key, "Hello", "Hi there!")
-    history = _load_history(key)
-
-    assert len(history) == 2
-    assert history[0] == {"role": "user", "content": "Hello"}
-    assert history[1] == {"role": "assistant", "content": "Hi there!"}
-
-    _conversation_store.pop(key, None)
+def test_load_conversation_history_returns_empty_for_new_thread() -> None:
+    assert load_conversation_history("session:continuity-empty-thread") == []
 
 
-def test_load_history_returns_empty_for_new_session() -> None:
-    """_load_history returns an empty list for an unknown session key."""
-    history = _load_history("nonexistent:key:12345")
-    assert history == []
+def test_run_agent_persists_history_by_session_id(monkeypatch) -> None:
+    def fake_structured_decision(_prompt, _message, model_cls):
+        if model_cls is agent_graph.RouteDecision:
+            return model_cls(route="COACH")
+        if model_cls is agent_graph.SentimentAnalysis:
+            return model_cls(
+                primary_sentiment="stressed",
+                emotional_intensity="medium",
+                support_style="gentle_and_validating",
+                user_needs=["validation"],
+                coach_handoff="Respond supportively.",
+            )
+        return model_cls(action="continue", risk_level="normal", coach_message="", resources=[])
+
+    monkeypatch.setattr(agent_graph, "_structured_decision", fake_structured_decision)
+    monkeypatch.setattr(agent_graph, "_graph_model_response", lambda *_args, **_kwargs: AIMessage(content="I can help."))
+    monkeypatch.setattr(agent_graph, "_structured_chat_response", lambda *_args, **_kwargs: {"coach_message": "I can help.", "risk_level": "normal"})
+
+    session_id = "session:continuity-direct"
+    run_agent("First message", session_id=session_id, context=GraphRuntimeContext())
+    run_agent("Second message", session_id=session_id, context=GraphRuntimeContext())
+    history = load_conversation_history(session_id)
+
+    assert len(history) >= 4
+    assert history[0] == {"role": "user", "content": "First message"}
+    assert history[1] == {"role": "assistant", "content": "I can help."}
+    assert history[-2] == {"role": "user", "content": "Second message"}
+    assert history[-1] == {"role": "assistant", "content": "I can help."}
 
 
-def test_history_accumulates_across_exchanges() -> None:
-    """Multiple _append_to_history calls accumulate in the store."""
-    key = "test:accumulate"
-    _conversation_store.pop(key, None)
+def test_chat_endpoint_accumulates_history_in_langgraph_thread(monkeypatch) -> None:
+    def fake_structured_decision(_prompt, _message, model_cls):
+        if model_cls is agent_graph.RouteDecision:
+            return model_cls(route="COACH")
+        if model_cls is agent_graph.SentimentAnalysis:
+            return model_cls(
+                primary_sentiment="overwhelmed",
+                emotional_intensity="medium",
+                support_style="calm_and_reassuring",
+                user_needs=["grounding"],
+                coach_handoff="Use a calm tone.",
+            )
+        return model_cls(action="continue", risk_level="normal", coach_message="", resources=[])
 
-    _append_to_history(key, "msg1", "reply1")
-    _append_to_history(key, "msg2", "reply2")
-    _append_to_history(key, "msg3", "reply3")
-
-    history = _load_history(key)
-    assert len(history) == 6  # 3 exchanges × 2 messages each
-    assert history[4] == {"role": "user", "content": "msg3"}
-    assert history[5] == {"role": "assistant", "content": "reply3"}
-
-    _conversation_store.pop(key, None)
-
-
-def test_history_capped_at_max_turns() -> None:
-    """_save_history caps messages at conversation_history_max_turns × 2."""
-    key = "test:cap"
-    _conversation_store.pop(key, None)
-
-    max_turns = settings.conversation_history_max_turns
-    # Insert more messages than the cap
-    history = []
-    for i in range(max_turns + 5):
-        history.append({"role": "user", "content": f"msg{i}"})
-        history.append({"role": "assistant", "content": f"reply{i}"})
-
-    _save_history(key, history)
-    saved = _load_history(key)
-
-    max_messages = max_turns * 2
-    assert len(saved) == max_messages
-    # Should keep the most recent messages
-    assert saved[-1]["content"] == f"reply{max_turns + 4}"
-
-    _conversation_store.pop(key, None)
-
-
-def test_separate_sessions_have_separate_histories() -> None:
-    """Different session keys maintain independent conversation histories."""
-    key_a = "test:session_a"
-    key_b = "test:session_b"
-    _conversation_store.pop(key_a, None)
-    _conversation_store.pop(key_b, None)
-
-    _append_to_history(key_a, "Hello from A", "Hi A!")
-    _append_to_history(key_b, "Hello from B", "Hi B!")
-
-    history_a = _load_history(key_a)
-    history_b = _load_history(key_b)
-
-    assert len(history_a) == 2
-    assert len(history_b) == 2
-    assert history_a[0]["content"] == "Hello from A"
-    assert history_b[0]["content"] == "Hello from B"
-
-    _conversation_store.pop(key_a, None)
-    _conversation_store.pop(key_b, None)
-
-
-# ---------------------------------------------------------------------------
-# Integration test — /chat endpoint accumulates history
-# ---------------------------------------------------------------------------
-
-def test_chat_endpoint_accumulates_history(monkeypatch) -> None:
-    """Three sequential /chat requests with the same session should accumulate history."""
-    call_count = {"n": 0}
-
-    def mock_run_agent(message, **kwargs):
-        call_count["n"] += 1
-        return {
-            "coach_message": f"Response {call_count['n']} to your message.",
-            "risk_level": "normal",
-        }
-
-    monkeypatch.setattr("app.main.run_agent", mock_run_agent)
+    monkeypatch.setattr(agent_graph, "_structured_decision", fake_structured_decision)
+    monkeypatch.setattr(agent_graph, "_graph_model_response", lambda *_args, **_kwargs: AIMessage(content="Response from graph."))
+    monkeypatch.setattr(agent_graph, "_structured_chat_response", lambda *_args, **_kwargs: {"coach_message": "Response from graph.", "risk_level": "normal"})
+    monkeypatch.setattr(agent_graph, "_current_booking_session", lambda _context: {"status": "NO_PENDING", "pending": False, "expired": False, "payload": {}, "expires_at": None})
 
     client = TestClient(app)
+    session_cookie = "continuity-test-cookie"
+    client.cookies.set(settings.session_cookie_name, session_cookie)
+    session_id = f"session:{session_cookie}"
 
-    # Send 3 messages with the same session (TestClient maintains cookies)
-    messages = [
+    for message in [
         "I feel stressed about work",
-        "It's been really overwhelming lately",
-        "Do you have any tips for managing this?",
-    ]
-
-    for msg in messages:
-        response = client.post("/chat", json={"message": msg})
+        "It has been overwhelming lately",
+        "Do you have any tips?",
+    ]:
+        response = client.post("/chat", json={"message": message})
         assert response.status_code == 200
 
-    # Verify history was accumulated for the session
-    # The session key for unauthenticated TestClient is based on IP
-    matching_keys = [k for k in _conversation_store if _conversation_store[k]]
-    assert len(matching_keys) >= 1, "No conversation history found after 3 messages"
-
-    # Get the history for any active session
-    history = _conversation_store[matching_keys[0]]
-    # Should have at least 6 entries (3 user + 3 assistant)
-    assert len(history) >= 6, (
-        f"Expected ≥6 history entries after 3 exchanges, got {len(history)}"
-    )
+    history = load_conversation_history(session_id)
+    assert len(history) >= 6
+    assert history[0]["role"] == "user"
+    assert history[1]["role"] == "assistant"
+    assert history[-2]["content"] == "Do you have any tips?"
+    assert history[-1]["content"] == "Response from graph."

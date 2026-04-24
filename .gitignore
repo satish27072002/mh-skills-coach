@@ -32,3 +32,9 @@ data/papers/
 services/backend/test*.db
 
 
+
+# Tier 1/2 session leftovers
+.venv312/
+.claude/
+tmp_langgraph_smoke.db
+services/backend/tmp_seq_booking.db

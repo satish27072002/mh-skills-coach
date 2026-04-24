@@ -3,11 +3,8 @@ from fastapi.testclient import TestClient
 
 from app import db
 from app.config import settings
-from app.main import app, _guest_prompt_counts, GUEST_SESSION_COOKIE_NAME
+from app.main import app, _guest_prompt_store, GUEST_SESSION_COOKIE_NAME
 from app.models import User
-
-
-ORIGINAL_DATABASE_URL = str(db.engine.url)
 
 
 def _reset_db() -> None:
@@ -20,11 +17,12 @@ def _reset_db() -> None:
 
 @pytest.fixture()
 def guest_db():
+    original_url = str(db.engine.url)
     _reset_db()
-    _guest_prompt_counts.clear()
+    _guest_prompt_store.clear_all()
     yield
-    db.reset_engine(ORIGINAL_DATABASE_URL)
-    _guest_prompt_counts.clear()
+    db.reset_engine(original_url)
+    _guest_prompt_store.clear_all()
 
 
 def _mock_run_agent(message: str, **kwargs):
@@ -64,7 +62,6 @@ def test_guest_start_reuses_existing_session(guest_db):
     client = TestClient(app)
     r1 = client.post("/guest")
     assert r1.status_code == 200
-    token = r1.cookies[GUEST_SESSION_COOKIE_NAME]
     # Call again with existing cookie
     r2 = client.post("/guest")
     assert r2.status_code == 200

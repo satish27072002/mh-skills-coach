@@ -16,13 +16,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://postgres:postgres@postgres:5432/mh"
     mcp_base_url: str = "http://mcp:7000/mcp/"
     frontend_url: str = "http://localhost:3000"
-    nominatim_base_url: str = "https://nominatim.openstreetmap.org"
-    overpass_base_url: str = "https://overpass-api.de"
-    therapist_search_enabled: bool = True
-    therapist_search_user_agent: str = "mh-skills-coach/0.1 (dev)"
+    # NOTE: nominatim_base_url, overpass_base_url, therapist_search_enabled,
+    # therapist_search_user_agent, and demo_mode were removed in Tier 2
+    # cleanup — they were defined but never read anywhere in the backend.
+    # nominatim/overpass/user_agent belong to the MCP service, which reads
+    # them directly from environment variables via os.getenv(...).
     therapist_search_radius_km_default: int = 10
     therapist_search_limit: int = 10
-    demo_mode: bool = False
     dev_mode: bool = False
     llm_provider: Literal["openai", "mock"] = "openai"
     embed_provider: Literal["openai", "mock"] = "openai"
@@ -58,12 +58,26 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 30.0   # timeout for all LLM calls
     llm_max_retries: int = 3            # tenacity retry attempts
 
-    # Conversation memory
-    conversation_history_max_turns: int = 10  # max user+assistant turn pairs kept per session
+    # NOTE: conversation_history_max_turns was removed in Tier 2 cleanup.
+    # It was a pre-LangGraph-checkpointer vestige and is now superseded by
+    # graph_message_window below, which is the authoritative history cap.
+
+    # Graph message window — hard cap on how many messages LangGraph keeps in
+    # the checkpointed state for a single thread.  The trim_history node emits
+    # RemoveMessage entries when the window is exceeded.  Guards against
+    # unbounded state growth → prompt inflation → cost/latency/context overflow.
+    graph_message_window: int = 20
 
     # Guest mode
     guest_session_cookie_name: str = "mh_guest_session"
     guest_prompt_limit: int = 15
+
+    # Anonymous session identity — minted on first /chat request for users
+    # without an auth cookie and without an explicit guest session.  Used as
+    # the stable key for rate limiting and graph session checkpointing so
+    # that users behind the same NAT/IP do NOT share rate-limit buckets.
+    anon_session_cookie_name: str = "mh_anon"
+    anon_session_cookie_max_age: int = 60 * 60 * 24 * 30  # 30 days
 
 
 settings = Settings()

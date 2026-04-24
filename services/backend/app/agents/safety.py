@@ -21,7 +21,7 @@ class SafetyGate:
             return None
 
         parsed = self._therapist_agent.parse_message(message)
-        location = parsed.location_text or self._therapist_agent.get_remembered_location(user=user, request=request)
+        location = parsed.location_text
 
         therapists = None
         search_available = self._therapist_agent.dev_mode or bool(user and user.is_premium)
@@ -32,8 +32,6 @@ class SafetyGate:
                     radius_km=parsed.radius_km,
                     specialty=parsed.specialty,
                 )
-                if therapists:
-                    self._therapist_agent.remember_location(user=user, request=request, location=location)
             except HTTPException:
                 therapists = None
 

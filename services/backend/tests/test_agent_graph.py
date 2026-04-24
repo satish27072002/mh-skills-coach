@@ -1,51 +1,54 @@
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app import agent_graph
-from app.agent_graph import run_agent
+from app.agent_graph import GraphRuntimeContext, run_agent
 
 
-def test_crisis_response_does_not_call_llm():
-    called = {"llm": False, "retrieve": False}
+def test_crisis_response_does_not_call_llm(monkeypatch):
+    """Crisis messages are intercepted by the safety node before any LLM is invoked."""
+    llm_called = {"value": False}
 
-    def retrieve_stub(_state):
-        called["retrieve"] = True
-        return {"retrieved_chunks": []}
+    def fail_if_llm_called(*args, **kwargs):
+        llm_called["value"] = True
+        raise AssertionError("LLM must not be called for crisis messages")
 
-    def llm_stub(_state):
-        called["llm"] = True
-        return {"response_json": {"coach_message": "should not be used"}}
+    monkeypatch.setattr(agent_graph, "_graph_model_response", fail_if_llm_called)
 
-    response = run_agent(
-        "I want to end my life",
-        retrieve_fn=retrieve_stub,
-        llm_fn=llm_stub
-    )
+    response = run_agent("I want to end my life", context=GraphRuntimeContext())
 
     assert "coach_message" in response
-    assert called["llm"] is False
-    assert called["retrieve"] is False
+    assert llm_called["value"] is False
 
 
-def test_non_crisis_calls_retrieve_and_llm():
-    called = {"llm": False, "retrieve": False}
+def test_non_crisis_routes_through_coach_llm(monkeypatch):
+    """Non-crisis messages flow through supervisor → sentiment → coach, calling the LLM."""
+    llm_called = {"value": False}
 
-    def retrieve_stub(_state):
-        called["retrieve"] = True
-        return {"retrieved_chunks": [{"text": "chunk"}]}
+    def fake_structured_decision(_prompt, _message, model_cls):
+        if model_cls is agent_graph.RouteDecision:
+            return model_cls(route="COACH")
+        if model_cls is agent_graph.SentimentAnalysis:
+            return model_cls(
+                primary_sentiment="anxious",
+                emotional_intensity="medium",
+                support_style="calm_and_reassuring",
+                user_needs=["reassurance"],
+                coach_handoff="Be calm and supportive.",
+            )
+        return model_cls(action="continue", risk_level="normal", coach_message="", resources=[])
 
-    def llm_stub(_state):
-        called["llm"] = True
-        return {"response_json": {"coach_message": "hello"}}
+    def fake_graph_model_response(_prompt, _state, *, tools):
+        llm_called["value"] = True
+        return AIMessage(content="Here is some grounding advice.")
 
-    response = run_agent(
-        "I feel anxious",
-        retrieve_fn=retrieve_stub,
-        llm_fn=llm_stub
-    )
+    monkeypatch.setattr(agent_graph, "_structured_decision", fake_structured_decision)
+    monkeypatch.setattr(agent_graph, "_graph_model_response", fake_graph_model_response)
+    monkeypatch.setattr(agent_graph, "_structured_chat_response", lambda *_: {"coach_message": "hello", "risk_level": "normal"})
+
+    response = run_agent("I feel anxious", context=GraphRuntimeContext())
 
     assert response["coach_message"] == "hello"
-    assert called["retrieve"] is True
-    assert called["llm"] is True
+    assert llm_called["value"] is True
 
 
 def test_coach_route_now_hands_off_to_sentiment_agent_first():

@@ -26,7 +26,7 @@ class TherapistResult(BaseModel):
     name: str
     address: str
     url: str
-    phone: str
+    phone: str | None = None
     distance_km: float
     email: str | None = None
     source_url: str | None = None

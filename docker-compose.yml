@@ -48,7 +48,7 @@ services:
     volumes:
       - ./data/papers:/data/papers:ro
     environment:
-      - MCP_BASE_URL=${MCP_BASE_URL:-http://mcp:7000/mcp}
+      - MCP_BASE_URL=${MCP_BASE_URL:-http://mcp:7000/mcp/}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000/}
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
       - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}

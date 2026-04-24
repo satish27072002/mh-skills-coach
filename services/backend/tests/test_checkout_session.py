@@ -79,3 +79,6 @@ def test_get_checkout_session_returns_status(test_db, monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert payload["payment_status"] == "paid"
+    with db.SessionLocal() as session:
+        refreshed = session.get(User, user.id)
+        assert refreshed.is_premium is True

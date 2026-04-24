@@ -20,14 +20,8 @@ def _reset_db() -> None:
 def therapist_chat_db():
     original_url = str(db.engine.url)
     _reset_db()
-    from app.agents import therapist_agent
-
-    therapist_agent.LAST_THERAPIST_LOCATION_BY_SESSION.clear()
-    therapist_agent.PENDING_THERAPIST_QUERY_BY_SESSION.clear()
     yield
     db.reset_engine(original_url)
-    therapist_agent.LAST_THERAPIST_LOCATION_BY_SESSION.clear()
-    therapist_agent.PENDING_THERAPIST_QUERY_BY_SESSION.clear()
 
 
 def test_chat_find_therapist_routes_to_search_not_booking(monkeypatch, therapist_chat_db):

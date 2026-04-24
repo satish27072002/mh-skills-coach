@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, DateTime, String, Text, Uuid, func
+from sqlalchemy import BigInteger, Boolean, DateTime, LargeBinary, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -54,3 +54,64 @@ class PendingAction(Base):
     payload_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class GuestSessionUsage(Base):
+    __tablename__ = "guest_session_usage"
+
+    token: Mapped[str] = mapped_column(String(120), primary_key=True)
+    prompt_count: Mapped[int] = mapped_column(BigInteger, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class RateLimitEvent(Base):
+    __tablename__ = "rate_limit_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    client_key: Mapped[str] = mapped_column(String(255), index=True)
+    route_key: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class GraphCheckpoint(Base):
+    __tablename__ = "graph_checkpoints"
+
+    thread_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    checkpoint_ns: Mapped[str] = mapped_column(String(255), primary_key=True, default="")
+    checkpoint_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    checkpoint_type: Mapped[str] = mapped_column(String(32))
+    checkpoint_data: Mapped[bytes] = mapped_column(LargeBinary)
+    metadata_type: Mapped[str] = mapped_column(String(32))
+    metadata_data: Mapped[bytes] = mapped_column(LargeBinary)
+    parent_checkpoint_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class GraphCheckpointBlob(Base):
+    __tablename__ = "graph_checkpoint_blobs"
+
+    thread_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    checkpoint_ns: Mapped[str] = mapped_column(String(255), primary_key=True, default="")
+    channel: Mapped[str] = mapped_column(String(255), primary_key=True)
+    version: Mapped[str] = mapped_column(String(255), primary_key=True)
+    value_type: Mapped[str] = mapped_column(String(32))
+    value_data: Mapped[bytes] = mapped_column(LargeBinary)
+
+
+class GraphCheckpointWrite(Base):
+    __tablename__ = "graph_checkpoint_writes"
+
+    thread_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    checkpoint_ns: Mapped[str] = mapped_column(String(255), primary_key=True, default="")
+    checkpoint_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    write_idx: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    channel: Mapped[str] = mapped_column(String(255))
+    value_type: Mapped[str] = mapped_column(String(32))
+    value_data: Mapped[bytes] = mapped_column(LargeBinary)
+    task_path: Mapped[str] = mapped_column(String(512), default="")

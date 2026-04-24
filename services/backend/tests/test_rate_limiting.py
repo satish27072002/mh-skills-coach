@@ -207,3 +207,87 @@ class TestRateLimiterUnit:
             rl.check("key-x")
         # key-y is unaffected
         rl.check("key-y")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Tier 1.2 — anonymous session cookie isolates rate-limit buckets per browser.
+#
+# Without the fix, unauthenticated users without a guest cookie fall through
+# to client IP — so everyone on the same NAT / corporate proxy / mobile
+# carrier share one rate-limit bucket.  The /chat endpoint now mints a stable
+# `mh_anon` cookie on first unauthenticated request and keys rate limiting
+# on that cookie, giving each browser its own bucket.
+# ---------------------------------------------------------------------------
+
+
+class TestAnonymousSessionIsolation:
+    """Two browsers on the same IP must get independent rate-limit buckets."""
+
+    def test_anon_cookie_is_minted_on_first_unauthenticated_chat(self, monkeypatch, rl_db):
+        """First unauthenticated /chat response must Set-Cookie the anon token."""
+        _monkeypatch_run_agent(monkeypatch)
+        client = TestClient(app)
+        # No auth cookie, no guest cookie.
+        response = client.post("/chat", json={"message": "hello"})
+        assert response.status_code == 200
+        # Either FastAPI's TestClient stored the cookie on the client, or the
+        # Set-Cookie header was returned.
+        got_cookie = (
+            client.cookies.get(settings.anon_session_cookie_name)
+            or any(
+                h.lower().startswith(settings.anon_session_cookie_name.lower() + "=")
+                for h in response.headers.get_list("set-cookie")
+            )
+        )
+        assert got_cookie, (
+            f"Expected the server to mint the {settings.anon_session_cookie_name} cookie "
+            "on the first unauthenticated /chat request."
+        )
+
+    def test_two_anon_browsers_same_ip_get_independent_buckets(self, monkeypatch, rl_db):
+        """Simulate two browsers (different anon cookies) hitting /chat from
+        what looks like the same IP.  Browser A exhausts its quota; Browser B
+        must still be served because its anon token is different.
+        """
+        _monkeypatch_run_agent(monkeypatch)
+
+        client_a = TestClient(app)
+        client_a.cookies.set(settings.anon_session_cookie_name, "anon-browser-a-token")
+        # Clear auth / guest cookies so only the anon cookie is active.
+        client_a.cookies.set(settings.session_cookie_name, "")
+        client_a.cookies.set(settings.guest_session_cookie_name, "")
+
+        for _ in range(settings.rate_limit_chat_requests):
+            _make_chat_request(client_a)
+
+        assert _make_chat_request(client_a) == 429, (
+            "Browser A should be rate-limited after exhausting its anon bucket."
+        )
+
+        client_b = TestClient(app)
+        client_b.cookies.set(settings.anon_session_cookie_name, "anon-browser-b-token")
+        client_b.cookies.set(settings.session_cookie_name, "")
+        client_b.cookies.set(settings.guest_session_cookie_name, "")
+
+        assert _make_chat_request(client_b) == 200, (
+            "Browser B with a different anon cookie must NOT inherit Browser A's "
+            "rate-limit bucket (the IP-fallback bug)."
+        )
+
+    def test_anon_cookie_is_reused_across_requests(self, monkeypatch, rl_db):
+        """Once minted, the anon cookie should persist so the SAME browser
+        keeps consuming its single bucket (not get a fresh bucket each turn).
+        """
+        _monkeypatch_run_agent(monkeypatch)
+        client = TestClient(app)
+        client.cookies.set(settings.session_cookie_name, "")
+        client.cookies.set(settings.guest_session_cookie_name, "")
+
+        # Drive through the full quota on the same client; the anon cookie
+        # stays stable so these all hit the same bucket.
+        for _ in range(settings.rate_limit_chat_requests):
+            assert _make_chat_request(client) == 200
+        assert _make_chat_request(client) == 429, (
+            "Same browser (same anon cookie) should be rate-limited after "
+            "the quota is exhausted — cookie must not rotate between requests."
+        )
